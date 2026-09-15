@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ftp-config
+  namespace: ftp
+data:
+  FTP_LISTEN: ":2121"
+  FTP_PASSIVE_PORT_RANGE: "50000-50999"
+  FTP_IDLE_TIMEOUT: "300s"
+  FTP_PUBLIC_IP: "REPLACE_WITH_LB_IP"
+  COS_USE_POD_IDENTITY: "true"
+  STS_REFRESH_RATIO: "0.8"
+  AUDIT_RETENTION_DAYS: "365"
+  ADMIN_LISTEN: ":8080"
+  LOG_LEVEL: "info"
+  LOG_FORMAT: "json"
+  FTP_LOCAL_ROOT: "/tmp/ftp-m1"
+  AUTH_LOCKOUT_LIMIT: "5"
+  AUTH_LOCKOUT_WINDOW: "15m"

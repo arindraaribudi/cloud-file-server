@@ -1,0 +1,30 @@
+bin/
+/ftp-server
+/migrate
+migrate
+ftp-server
+*.test
+*.out
+coverage.out
+coverage.html
+
+# JS/TS workspaces
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Bun
+.bun/
+
+# Playwright
+/apps/web/test-results/
+/apps/web/playwright-report/
+/apps/web/playwright/.cache/
+
+.DS_Store
+.idea/
+.vscode/
+.env*
+!.env.example
+info

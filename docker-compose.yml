@@ -1,0 +1,67 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ftp
+      POSTGRES_USER: ftp
+      POSTGRES_PASSWORD: ftp
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ftp -d ftp"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  ftp-server:
+    build:
+      context: ./apps/ftp
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://ftp:ftp@postgres:5432/ftp?sslmode=disable
+      FTP_LISTEN: ":2121"
+      FTP_PUBLIC_IP: ${FTP_PUBLIC_IP:-}
+      FTP_PASSIVE_PORT_RANGE: "50000-50999"
+      FTP_ALLOW_PLAIN: "true"
+      ADMIN_LISTEN: ":7000"
+      ADMIN_COOKIE_SECURE: "false"
+      FTP_SEED: ${FTP_SEED:-false}
+      FTP_SEED_USER: ${FTP_SEED_USER:-admin}
+      FTP_SEED_PASS: ${FTP_SEED_PASS:-}
+      COS_USE_POD_IDENTITY: "false"
+      COS_STATIC_SECRET_ID: ${COS_STATIC_SECRET_ID:-changeme}
+      COS_STATIC_SECRET_KEY: ${COS_STATIC_SECRET_KEY:-changeme}
+      COS_STATIC_SESSION_TOKEN: ${COS_STATIC_SESSION_TOKEN:-}
+      COS_BUCKET: ${COS_BUCKET:-test-1409486316}
+      COS_REGION: ${COS_REGION:-ap-bangkok}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:9001}
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_ADMIN_GROUP: ${OIDC_ADMIN_GROUP:-admin}
+      OIDC_READONLY_GROUP: ${OIDC_READONLY_GROUP:-readonly}
+      OIDC_FRONTEND_REDIRECT_URL: ${OIDC_FRONTEND_REDIRECT_URL:-/auth/callback}
+      FTP_DEFAULT_ROOT_PREFIX: ${FTP_DEFAULT_ROOT_PREFIX:-/t/t/}
+    ports:
+      - "2121:2121"
+      - "7000:7000"
+      - "50000-50999:50000-50999"
+
+  web:
+    build:
+      context: ./apps/web
+    depends_on:
+      - ftp-server
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: ${PORT:-9001}
+      FTP_UPSTREAM: ${FTP_UPSTREAM:-http://ftp-server:7000}
+    ports:
+      - "9001:9001"
+
+volumes:
+  pgdata:

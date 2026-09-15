@@ -1,0 +1,27 @@
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: ftp-public
+  namespace: ftp
+spec:
+  parentRefs:
+    - name: public-gateway
+      sectionName: ftp-control
+  rules:
+    - backendRefs:
+        - name: ftp-server
+          port: 2121
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: ftp-passive-50000
+  namespace: ftp
+spec:
+  parentRefs:
+    - name: public-gateway
+      sectionName: ftp-passive-50000
+  rules:
+    - backendRefs:
+        - name: ftp-server
+          port: 50000

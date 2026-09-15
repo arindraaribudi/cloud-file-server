@@ -1,0 +1,22 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ftp-audit-retention
+  namespace: ftp
+spec:
+  schedule: "0 3 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: retention
+              image: REPLACE_ME/cos-ftp-server:latest
+              command: ["psql", "$(DATABASE_URL)", "-c", "SELECT 1"]
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: ftp-db
+                      key: DATABASE_URL

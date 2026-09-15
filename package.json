@@ -1,0 +1,18 @@
+{
+  "name": "cloud-file-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": ["apps/*"],
+  "scripts": {
+    "dev:web": "bun --cwd apps/web run dev",
+    "dev:ftp": "bun run apps/ftp/Makefile -- run",
+    "build:web": "bun --cwd apps/web run build",
+    "build": "bun run build:web",
+    "typecheck": "bun --cwd apps/web run typecheck && (cd apps/ftp && go vet ./...)",
+    "test:ftp": "cd apps/ftp && go test -race ./...",
+    "lint:ftp": "cd apps/ftp && golangci-lint run ./...",
+    "fmt:ftp": "cd apps/ftp && go fmt ./..."
+  },
+  "engines": { "bun": "1.4.0" }
+}
