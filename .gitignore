@@ -2,7 +2,6 @@ bin/
 /ftp-server
 /migrate
 migrate
-ftp-server
 *.test
 *.out
 coverage.out
