@@ -1,6 +1,6 @@
 module github.com/example/cos-ftp-server
 
-go 1.26.0
+go 1.26.6
 
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0
@@ -8,16 +8,14 @@ require (
 	github.com/go-chi/chi/v5 v5.1.0
 	github.com/golang-migrate/migrate/v4 v4.17.1
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.5.5
+	github.com/jackc/pgx/v5 v5.9.2
 	github.com/prometheus/client_golang v1.20.5
 	github.com/spf13/afero v1.11.0
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/sts v1.1.11
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.75
-	golang.org/x/crypto v0.31.0
+	golang.org/x/crypto v0.53.0
 	golang.org/x/oauth2 v0.37.0
 )
-
-require golang.org/x/net v0.30.0 // indirect
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -39,12 +37,11 @@ require (
 	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.55.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
-	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.1.11 // indirect
 	go.uber.org/atomic v1.7.0 // indirect
-	golang.org/x/sync v0.10.0 // indirect
-	golang.org/x/sys v0.28.0 // indirect
-	golang.org/x/text v0.21.0 // indirect
-	golang.org/x/tools v0.26.0 // indirect
+	golang.org/x/net v0.56.0 // indirect
+	golang.org/x/sync v0.21.0 // indirect
+	golang.org/x/sys v0.46.0 // indirect
+	golang.org/x/text v0.39.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 )
