@@ -101,7 +101,7 @@ func (l *Logger) writeBatch(ctx context.Context, batch []Event) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	for _, e := range batch {
 		detail, err := json.Marshal(e.Detail)
 		if err != nil {

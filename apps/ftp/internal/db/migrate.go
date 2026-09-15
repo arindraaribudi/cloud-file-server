@@ -28,7 +28,7 @@ func Migrate(dsn string) error {
 	if err != nil {
 		return fmt.Errorf("migrate: sql.Open: %w", err)
 	}
-	defer dbConn.Close()
+	defer func() { _ = dbConn.Close() }()
 
 	driver, err := migratepgx.WithInstance(dbConn, &migratepgx.Config{})
 	if err != nil {
@@ -39,7 +39,7 @@ func Migrate(dsn string) error {
 	if err != nil {
 		return fmt.Errorf("migrate: instance: %w", err)
 	}
-	defer m.Close()
+	defer func() { _, _ = m.Close() }()
 
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("migrate: up: %w", err)

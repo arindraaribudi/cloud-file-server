@@ -28,7 +28,7 @@ func TestLoggerWritesRows(t *testing.T) {
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	l := New(pool, log)
-	defer l.Close(context.Background())
+	defer func() { _ = l.Close(context.Background()) }()
 
 	ctx := context.Background()
 	uniq := fmt.Sprintf("test-%d", time.Now().UnixNano())

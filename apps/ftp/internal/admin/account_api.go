@@ -10,7 +10,7 @@ import (
 // session confirms the caller's cookie is still valid and reports who they are.
 func (a *API) session(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"username":   CurrentUser(r),
 		"role":       CurrentRole(r),
 		"email":      CurrentEmail(r),

@@ -73,7 +73,7 @@ func (a *API) queryAudit(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, rec)
 	}
-	json.NewEncoder(w).Encode(out)
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 func (a *API) exportAuditCSV(w http.ResponseWriter, r *http.Request) {
@@ -92,7 +92,7 @@ func (a *API) exportAuditCSV(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", `attachment; filename="audit.csv"`)
 	cw := csv.NewWriter(w)
 	defer cw.Flush()
-	cw.Write([]string{"event_time", "username", "client_ip", "action", "path", "bytes", "success"})
+	_ = cw.Write([]string{"event_time", "username", "client_ip", "action", "path", "bytes", "success"})
 	for rows.Next() {
 		var et time.Time
 		var u string
@@ -104,7 +104,7 @@ func (a *API) exportAuditCSV(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&et, &u, &cip, &act, &p, &b, &ok); err != nil {
 			continue
 		}
-		cw.Write([]string{et.UTC().Format(time.RFC3339), u, deref(cip), act, p, strconv.FormatInt(b, 10), strconv.FormatBool(ok)})
+		_ = cw.Write([]string{et.UTC().Format(time.RFC3339), u, deref(cip), act, p, strconv.FormatInt(b, 10), strconv.FormatBool(ok)})
 	}
 }
 

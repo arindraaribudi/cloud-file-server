@@ -16,7 +16,7 @@ func TestLocalDriverListsFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	infos, err := f.Readdir(-1)
 	if err != nil {
 		t.Fatal(err)
