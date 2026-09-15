@@ -72,7 +72,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 
 	auditLog := audit.New(pool, log)
-	defer auditLog.Close(context.Background())
+	defer func() { _ = auditLog.Close(context.Background()) }()
 
 	if cfg.COSStaticSecretID == "" || cfg.COSStaticSecretKey == "" {
 		return fmt.Errorf("COS_STATIC_SECRET_ID and COS_STATIC_SECRET_KEY required for M2 wiring")
