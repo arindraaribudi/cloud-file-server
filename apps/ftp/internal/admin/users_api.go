@@ -86,7 +86,7 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 	}
 	a.Audit.Log(audit.Event{Username: CurrentUser(r), Action: "ADMIN_CREATE_USER", Path: created.Username, Success: true})
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(created)
+	_ = json.NewEncoder(w).Encode(created)
 }
 
 func (a *API) updateUser(w http.ResponseWriter, r *http.Request) {
@@ -126,7 +126,7 @@ func (a *API) updateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	a.Audit.Log(audit.Event{Username: CurrentUser(r), Action: "ADMIN_UPDATE_USER", Path: username, Success: true})
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(updated)
+	_ = json.NewEncoder(w).Encode(updated)
 }
 
 func (a *API) resetUserPassword(w http.ResponseWriter, r *http.Request) {
