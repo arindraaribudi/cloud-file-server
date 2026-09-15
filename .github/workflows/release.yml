@@ -81,10 +81,12 @@ jobs:
         run: CGO_ENABLED=0 go build -o /tmp/ftp-server-build ./cmd/ftp-server
 
       - name: web typecheck
-        run: bun --cwd apps/web run typecheck
+        working-directory: apps/web
+        run: bun run typecheck
 
       - name: web build
-        run: bun --cwd apps/web run build
+        working-directory: apps/web
+        run: bun run build
 
   release:
     name: release
@@ -199,13 +201,14 @@ jobs:
           tar czf "/tmp/release/ftp-${TAG}-linux-amd64.tar.gz" -C /tmp ftp-server
 
       - name: build + package web
+        working-directory: apps/web
         env:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
           bun install --frozen-lockfile
-          bun --cwd apps/web run build
-          tar czf "/tmp/release/web-${TAG}.tar.gz" -C apps/web/dist .
+          bun run build
+          tar czf "/tmp/release/web-${TAG}.tar.gz" -C dist .
 
       - name: stage assets
         run: ls -la /tmp/release
