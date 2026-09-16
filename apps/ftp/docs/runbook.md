@@ -60,3 +60,33 @@ DATABASE_URL=postgres://... ./scripts/smoke.sh
 1. Use a Gateway implementation that supports `TcpListener` with port ranges (recommended).
 2. Front the service with a TCP multiplexer (e.g. HAProxy `tproxy`).
 3. Accept the operational cost of 1000 `TCPRoute` objects.
+
+## Incident log
+
+### 2026-09-16 — "cos: no credential source available" on every folder listing
+
+**Symptom.** Admin web UI shows `Could not load folder suggestions: list folders: cos: no credential source available`. Every call to `/api/v1/folders` returns 502. FTP data plane works if a user was already provisioned with cached creds, but listing folders always fails.
+
+**Root cause.** Chain had no usable credential at request time:
+- TKE pod identity env vars (`TKE_ROLE_ARN`, `TKE_WEB_IDENTITY_TOKEN_FILE`) not injected into the pod
+- `COS_STATIC_SECRET_ID`/`KEY` not set in the secret
+- Chain booted with `usePodIdentity=true` + empty static → `Chain.Get` exhausted both sources → 502 per request
+
+**Trigger.** Image v0.0.4 (or any pre-v0.0.5) where `NewChainFromEnv` did not fail boot when both sources were missing.
+
+**Fix shipped in v0.0.5.** `NewChainFromEnv` now auto-detects pod identity from `TKE_WEB_IDENTITY_TOKEN_FILE` and fails boot fast with a clear message when neither source is configured, instead of serving silent 502s. Cache logic fixed (was re-fetching on every call). `Chain.Invalidate` + `Client.do` retry once on auth errors.
+
+**Resolve in-cluster.**
+
+1. Pick one credential source:
+   - **Static.** Uncomment and fill `COS_STATIC_SECRET_ID` / `COS_STATIC_SECRET_KEY` in the secret. No env-var knob required; absence of `TKE_WEB_IDENTITY_TOKEN_FILE` selects the static path automatically.
+   - **TKE pod identity.** Annotate the SA with the binding role ARN, add a projected service-account token volume, and set `TKE_ROLE_ARN` / `TKE_WEB_IDENTITY_TOKEN_FILE` on the ftp container. The CAM role must trust the cluster's OIDC provider for `sts:AssumeRoleWithWebIdentity`.
+2. `kubectl rollout restart deploy/ftp-server -n <ns>`
+3. Verify startup log: `cos: credential chain ready tke_pod_identity=<bool> static_fallback=<bool>`.
+4. `curl -b cookies.txt http://ftp-server:7000/api/v1/folders?prefix=/` should return JSON.
+
+**Verify the chain is actually rotating, not just cached forever.**
+```bash
+kubectl logs -n <ns> deploy/ftp-server | grep -E 'cos:|cred'
+```
+You should see no `no credential source` lines and STS calls limited to once per ~50 min per pod.
