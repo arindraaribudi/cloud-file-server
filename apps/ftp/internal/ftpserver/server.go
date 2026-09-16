@@ -3,6 +3,7 @@ package ftpserver
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -103,8 +104,13 @@ func (s *Server) AuthUser(cc ftpserver.ClientContext, user, pass string) (ftpser
 }
 
 func (s *Server) GetTLSConfig() (*tls.Config, error) {
+	// ftpserverlib v0.24.1 handleAUTH treats (nil, nil) as a valid empty TLS
+	// config: it calls tls.Server(conn, nil) and the next read panics in
+	// readClientHello dereferencing c.config. Returning a non-nil error here
+	// makes handleAUTH write 500 and skip the wrap. Reject AUTH TLS when
+	// certs aren't configured rather than crashing the connection.
 	if s.TLS == nil {
-		return nil, nil
+		return nil, errors.New("ftpserver: TLS not configured")
 	}
 	cert, err := tls.LoadX509KeyPair(s.TLS.CertFile, s.TLS.KeyFile)
 	if err != nil {
@@ -145,4 +151,13 @@ func (s *Server) Stop() error {
 	err := s.srv.Stop()
 	s.serveWG.Wait()
 	return err
+}
+
+// BoundAddr returns the bound control-channel address (e.g. "127.0.0.1:51234")
+// when Server.Addr=":0" was used to let the OS pick the port. Empty before Start.
+func (s *Server) BoundAddr() string {
+	if s.srv == nil {
+		return ""
+	}
+	return s.srv.Addr()
 }
