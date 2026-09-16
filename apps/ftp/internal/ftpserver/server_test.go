@@ -47,7 +47,7 @@ func TestAuthTLSRejectedWhenNotConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial %s: %v", s.BoundAddr(), err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
 
 	r := bufio.NewReader(conn)
