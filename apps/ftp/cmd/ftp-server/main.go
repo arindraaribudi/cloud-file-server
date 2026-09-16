@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -133,8 +135,23 @@ func run(ctx context.Context, log *slog.Logger) error {
 		Audit:  auditLog,
 		Logger: log,
 	}
+	if cfg.FTPTLSCert != "" && cfg.FTPTLSKey != "" {
+		srv.TLS = &ftpserver.TLSConfig{
+			CertFile: cfg.FTPTLSCert,
+			KeyFile:  cfg.FTPTLSKey,
+		}
+	}
 	if err := srv.Start(ctx); err != nil {
 		return err
+	}
+	if srv.TLS != nil {
+		if cert, err := tls.LoadX509KeyPair(srv.TLS.CertFile, srv.TLS.KeyFile); err == nil && len(cert.Certificate) > 0 {
+			if leaf, err := x509.ParseCertificate(cert.Certificate[0]); err == nil {
+				days := int(time.Until(leaf.NotAfter).Hours() / 24)
+				fmt.Printf("FTP TLS active: subject=%s issuer=%s expires=%s days_left=%d\n",
+					leaf.Subject, leaf.Issuer, leaf.NotAfter.UTC().Format(time.RFC3339), days)
+			}
+		}
 	}
 
 	// Admin API + metrics on cfg.AdminListen (default :8080).
