@@ -74,16 +74,19 @@ func run(ctx context.Context, log *slog.Logger) error {
 	auditLog := audit.New(pool, log)
 	defer func() { _ = auditLog.Close(context.Background()) }()
 
-	if cfg.COSStaticSecretID == "" || cfg.COSStaticSecretKey == "" {
-		return fmt.Errorf("COS_STATIC_SECRET_ID and COS_STATIC_SECRET_KEY required for M2 wiring")
+	chain, err := cos.NewChainFromEnv(ctx, cfg.COSUsePodIdentity, cfg.COSStaticSecretID, cfg.COSStaticSecretKey, cfg.COSStaticSessionToken, cfg.STSRefreshRatio)
+	if err != nil {
+		return err
 	}
-	creds := cos.Creds{
-		ID:     cfg.COSStaticSecretID,
-		Key:    cfg.COSStaticSecretKey,
-		Token:  cfg.COSStaticSessionToken,
-		Expiry: time.Now().Add(time.Hour),
+	if !cfg.COSUsePodIdentity && !chain.HasStatic() {
+		return fmt.Errorf("no credential source: set COS_STATIC_SECRET_ID + COS_STATIC_SECRET_KEY, or enable COS_USE_POD_IDENTITY with TKE_ROLE_ARN + TKE_WEB_IDENTITY_TOKEN_FILE")
 	}
-	client := cos.NewClient(cfg.COSBucket, cfg.COSRegion, creds, nil)
+	if cfg.COSUsePodIdentity {
+		log.Info("cos: credential chain ready", "tke_pod_identity", cos.HasTKEPodIdentity(), "static_fallback", chain.HasStatic())
+	} else {
+		log.Info("cos: using static credentials only")
+	}
+	client := cos.NewClientWithChain(cfg.COSBucket, cfg.COSRegion, chain)
 
 	srv := &ftpserver.Server{
 		Addr:             cfg.FTPListen,
@@ -106,7 +109,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 
 	// Admin API + metrics on cfg.AdminListen (default :8080).
-	adminClient := cos.NewClient(cfg.COSBucket, cfg.COSRegion, creds, nil)
+	adminClient := cos.NewClientWithChain(cfg.COSBucket, cfg.COSRegion, chain)
 	adminAPI := admin.New(pool, cfg.AdminCookieSecure, cfg.COSBucket, cfg.COSRegion, adminClient, cfg.FTPDefaultRootPrefix, auditLog)
 	if cfg.OIDCIssuerURL != "" {
 		oidcCtx, cancelOIDC := context.WithTimeout(ctx, 10*time.Second)

@@ -1,13 +1,19 @@
 package cos
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
-	"sync"
+	"fmt"
+	"io"
+	"net/http"
 	"net/url"
+	"os"
+	"strings"
+	"sync"
 	"time"
 
-	sts "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/sts/v20180813"
 	"github.com/tencentyun/cos-go-sdk-v5"
 )
 
@@ -28,20 +34,23 @@ type Chain struct {
 	usePodIdentity bool
 	refreshRatio   float64
 
-	mu    sync.Mutex
-	curr  creds
-	src   string
-	exp   time.Time
+	mu   sync.Mutex
+	curr creds
+	src  string
+	exp  time.Time
 }
 
 func newChain(sts stsClient, st stsClient, usePod bool, refreshRatio float64) *Chain {
 	return &Chain{sts: sts, static: st, usePodIdentity: usePod, refreshRatio: refreshRatio}
 }
 
+// NewChainFromEnv builds a credential chain from env vars. Pod identity is
+// attempted when COS_USE_POD_IDENTITY=true AND TKE pod-identity env vars are
+// set (TKE_ROLE_ARN + TKE_WEB_IDENTITY_TOKEN_FILE). The static AK/SK from
+// COS_STATIC_SECRET_ID/COS_STATIC_SECRET_KEY is always configured as the
+// fallback so STS errors don't break boot. Returns an error only when neither
+// source is usable.
 func NewChainFromEnv(ctx context.Context, usePodIdentity bool, id, key, token string, refreshRatio float64) (*Chain, error) {
-	if !usePodIdentity && id == "" {
-		return nil, errors.New("no credential source configured")
-	}
 	c := &Chain{usePodIdentity: usePodIdentity, refreshRatio: refreshRatio, static: &envStatic{id: id, key: key, tok: token}}
 	if usePodIdentity {
 		real, err := newOIDCSTS(ctx)
@@ -51,7 +60,19 @@ func NewChainFromEnv(ctx context.Context, usePodIdentity bool, id, key, token st
 			c.sts = real
 		}
 	}
+	if !usePodIdentity && (id == "" || key == "") {
+		return nil, errors.New("no credential source configured")
+	}
 	return c, nil
+}
+
+// HasStatic reports whether the chain has a usable static (SK/AK) fallback.
+func (c *Chain) HasStatic() bool {
+	if c.static == nil {
+		return false
+	}
+	_, err := c.static.Get(context.Background())
+	return err == nil
 }
 
 func (c *Chain) Get(ctx context.Context) (creds, string, error) {
@@ -99,8 +120,84 @@ type noopSTS struct{ err error }
 
 func (n *noopSTS) Get(ctx context.Context) (creds, error) { return creds{}, n.err }
 
-func newOIDCSTS(ctx context.Context) (stsClient, error) {
-	return nil, errors.New("oidc sts not wired in stub")
+// HasTKEPodIdentity reports whether the runtime looks like a TKE pod with the
+// OIDC web-identity token wired in. Used by callers to decide between STS and
+// static credential sources at boot.
+func HasTKEPodIdentity() bool {
+	return os.Getenv("TKE_ROLE_ARN") != "" && os.Getenv("TKE_WEB_IDENTITY_TOKEN_FILE") != ""
 }
 
-var _ = sts.NewClient
+// oidcSTS performs AssumeRoleWithWebIdentity against Tencent Cloud STS using
+// the OIDC token mounted by TKE pod identity. Uses the public endpoint with
+// `Authorization: SKIP` (sigv3) so no static key is required for the STS call.
+type oidcSTS struct {
+	roleArn, tokenFile, providerID, region string
+}
+
+func newOIDCSTS(_ context.Context) (stsClient, error) {
+	roleArn := os.Getenv("TKE_ROLE_ARN")
+	tokenFile := os.Getenv("TKE_WEB_IDENTITY_TOKEN_FILE")
+	if roleArn == "" || tokenFile == "" {
+		return nil, errors.New("tke pod identity env not set (need TKE_ROLE_ARN + TKE_WEB_IDENTITY_TOKEN_FILE)")
+	}
+	return &oidcSTS{
+		roleArn:    roleArn,
+		tokenFile:  tokenFile,
+		providerID: os.Getenv("TKE_PROVIDER_ID"),
+		region:     os.Getenv("TKE_REGION"),
+	}, nil
+}
+
+func (o *oidcSTS) Get(ctx context.Context) (creds, error) {
+	tok, err := os.ReadFile(o.tokenFile)
+	if err != nil {
+		return creds{}, fmt.Errorf("read web-identity token: %w", err)
+	}
+	body, _ := json.Marshal(map[string]string{
+		"RoleArn":          o.roleArn,
+		"WebIdentityToken": strings.TrimSpace(string(tok)),
+		"RoleSessionName":  "cos-ftp-server",
+		"ProviderId":       o.providerID,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://sts.tencentcloudapi.com/", bytes.NewReader(body))
+	if err != nil {
+		return creds{}, err
+	}
+	req.Header.Set("Host", "sts.tencentcloudapi.com")
+	req.Header.Set("X-TC-Action", "AssumeRoleWithWebIdentity")
+	req.Header.Set("X-TC-Version", "2018-08-13")
+	req.Header.Set("X-TC-Timestamp", fmt.Sprintf("%d", time.Now().Unix()))
+	req.Header.Set("Authorization", "SKIP")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return creds{}, fmt.Errorf("sts request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return creds{}, fmt.Errorf("sts status %d: %s", resp.StatusCode, string(raw))
+	}
+	var out struct {
+		Response struct {
+			Credentials struct {
+				Token        string `json:"Token"`
+				TmpSecretId  string `json:"TmpSecretId"`
+				TmpSecretKey string `json:"TmpSecretKey"`
+			} `json:"Credentials"`
+			ExpiredTime uint64 `json:"ExpiredTime"`
+		} `json:"Response"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return creds{}, fmt.Errorf("decode sts response: %w", err)
+	}
+	c := out.Response.Credentials
+	if c.TmpSecretId == "" || c.TmpSecretKey == "" {
+		return creds{}, errors.New("sts returned empty credentials")
+	}
+	exp := time.Now().Add(time.Hour)
+	if out.Response.ExpiredTime > 0 {
+		exp = time.Unix(int64(out.Response.ExpiredTime), 0)
+	}
+	return creds{ID: c.TmpSecretId, Key: c.TmpSecretKey, Token: c.Token, Expiry: exp}, nil
+}
