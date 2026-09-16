@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 	"time"
 
@@ -63,6 +65,13 @@ func (s *Server) GetSettings() (*ftpserver.Settings, error) {
 	opts := &ftpserver.Settings{
 		ListenAddr: listenAddr,
 		PublicHost: s.PublicHost,
+		// Control conn arrives via the gateway pod IP; the passive data
+		// connection comes from a different IP (different SNAT / pod). With
+		// the lib default (IPMatchRequired) we 425 every passive transfer.
+		// Disable the peer-IP check — TLS on the control channel is the
+		// auth boundary.
+		PasvConnectionsCheck:   ftpserver.IPMatchDisabled,
+		ActiveConnectionsCheck: ftpserver.IPMatchDisabled,
 	}
 	if s.PassivePortRange[1] > 0 {
 		opts.PassiveTransferPortRange = &ftpserver.PortRange{
@@ -113,11 +122,54 @@ func (s *Server) GetTLSConfig() (*tls.Config, error) {
 	if s.TLS == nil {
 		return nil, errors.New("ftpserver: TLS not configured")
 	}
-	cert, err := tls.LoadX509KeyPair(s.TLS.CertFile, s.TLS.KeyFile)
+	cert, err := loadCertChain(s.TLS.CertFile, s.TLS.KeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("ftpserver: tls: %w", err)
 	}
 	return &tls.Config{Certificates: []tls.Certificate{cert}}, nil
+}
+
+// loadCertChain reads certFile (PEM: first CERTIFICATE block is leaf, rest are
+// intermediates) and keyFile, returns a tls.Certificate whose Certificate slice
+// is [leaf, intermediates...]. Go's tls.LoadX509KeyPair drops everything past
+// the first block, which makes clients without cached intermediates fail
+// chain verification — FileZilla then warns "Unknown certificate".
+func loadCertChain(certFile, keyFile string) (tls.Certificate, error) {
+	pemBytes, err := os.ReadFile(certFile)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	var leafDER []byte
+	var chain [][]byte
+	for {
+		var block *pem.Block
+		block, pemBytes = pem.Decode(pemBytes)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		if leafDER == nil {
+			leafDER = block.Bytes
+		} else {
+			chain = append(chain, block.Bytes)
+		}
+	}
+	if leafDER == nil {
+		return tls.Certificate{}, errors.New("no certificate in " + certFile)
+	}
+	leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER})
+	keyPEM, err := os.ReadFile(keyFile)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	cert, err := tls.X509KeyPair(leafPEM, keyPEM)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	cert.Certificate = append([][]byte{leafDER}, chain...)
+	return cert, nil
 }
 
 func (s *Server) Start(_ context.Context) error {
