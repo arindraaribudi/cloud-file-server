@@ -87,6 +87,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("cos: using static credentials only")
 	}
 	client := cos.NewClientWithChain(cfg.COSBucket, cfg.COSRegion, chain)
+	log.Info("cos: client connected", "bucket", cfg.COSBucket, "region", cfg.COSRegion)
 
 	srv := &ftpserver.Server{
 		Addr:             cfg.FTPListen,
@@ -94,6 +95,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 		PassivePortRange: [2]int{cfg.PassivePortRange.Start, cfg.PassivePortRange.End},
 		IdleTimeout:      cfg.IdleTimeout,
 		NewDriver: func(u *db.FTPUser) (ftpserverlib.ClientDriver, error) {
+			log.Info("ftp: user connected", "username", u.Username, "bucket", cfg.COSBucket, "region", cfg.COSRegion, "root_prefix", u.RootFolder)
+			auditLog.Log(audit.Event{
+				Username: u.Username,
+				Action:   "LOGIN",
+				Success:  true,
+				Detail:   map[string]any{"bucket": cfg.COSBucket, "region": cfg.COSRegion, "root_prefix": u.RootFolder},
+			})
 			return fsdriver.NewAuditFS(fsdriver.NewCOS(u.RootFolder, client), auditLog, u.Username), nil
 		},
 		Authenticator: &ftpserver.DBAuthenticator{
