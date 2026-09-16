@@ -3,6 +3,7 @@ package ftpserver
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -122,7 +123,8 @@ func (s *Server) GetTLSConfig() (*tls.Config, error) {
 func (s *Server) Start(_ context.Context) error {
 	s.srv = ftpserver.NewFtpServer(s)
 	if s.Logger != nil {
-		s.Logger.Info("ftpserver starting", "addr", s.Addr, "port", s.Port, "passive", s.PassivePortRange)
+		s.Logger.Info("ftpserver starting", "addr", s.Addr, "port", s.Port, "passive", s.PassivePortRange, "public_host", s.PublicHost)
+		s.logTLSState()
 	}
 	// ponytail: split ListenAndServe into Listen + Serve. Listen binds the
 	// listener synchronously so Start returns only after the port is bound
@@ -160,4 +162,52 @@ func (s *Server) BoundAddr() string {
 		return ""
 	}
 	return s.srv.Addr()
+}
+
+// logTLSState reports whether FTPS is enabled, where the cert/key live, and
+// the leaf cert's subject / issuer / validity. Runs once at startup so
+// misconfiguration (missing file, parse error, expired cert) shows up in
+// stdout before the first client connects. Does NOT fail Start: control
+// channel still works without TLS, and GetTLSConfig will surface the error
+// to AUTH-TLS clients anyway.
+func (s *Server) logTLSState() {
+	if s.TLS == nil {
+		s.Logger.Info("ftpserver TLS disabled (plaintext only)")
+		return
+	}
+	s.Logger.Info("ftpserver TLS enabled",
+		"cert", s.TLS.CertFile,
+		"key", s.TLS.KeyFile,
+	)
+	cert, err := tls.LoadX509KeyPair(s.TLS.CertFile, s.TLS.KeyFile)
+	if err != nil {
+		s.Logger.Error("ftpserver TLS load failed", "err", err)
+		return
+	}
+	if len(cert.Certificate) == 0 {
+		s.Logger.Error("ftpserver TLS cert has no leaf")
+		return
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		s.Logger.Error("ftpserver TLS cert parse failed", "err", err)
+		return
+	}
+	daysLeft := int(time.Until(leaf.NotAfter).Hours() / 24)
+	attrs := []any{
+		"subject", leaf.Subject.String(),
+		"issuer", leaf.Issuer.String(),
+		"not_before", leaf.NotBefore.UTC().Format(time.RFC3339),
+		"not_after", leaf.NotAfter.UTC().Format(time.RFC3339),
+		"days_until_expiry", daysLeft,
+	}
+	if daysLeft < 0 {
+		s.Logger.Error("ftpserver TLS cert EXPIRED", attrs...)
+		return
+	}
+	if daysLeft < 30 {
+		s.Logger.Warn("ftpserver TLS cert expiring soon", attrs...)
+		return
+	}
+	s.Logger.Info("ftpserver TLS cert valid", attrs...)
 }
