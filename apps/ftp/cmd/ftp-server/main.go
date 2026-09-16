@@ -96,6 +96,16 @@ func run(ctx context.Context, log *slog.Logger) error {
 			Detail: detail,
 		})
 	}
+	if _, src, err := chain.Get(ctx); err != nil {
+		return fmt.Errorf("cos: credential validation failed at startup: %w", err)
+	} else {
+		log.Info("cos: credential chain validated", "source", src)
+	}
+	if claims, err := cos.WebIdentityClaims(); err != nil {
+		log.Warn("cos: could not decode web-identity token claims", "err", err)
+	} else {
+		log.Info("cos: web-identity token claims", "sub", claims["sub"], "iss", claims["iss"], "role_arn", os.Getenv("TKE_ROLE_ARN"))
+	}
 	log.Info("cos: credential chain ready", "tke_pod_identity", cos.HasTKEPodIdentity(), "static_fallback", chain.HasStatic())
 	client := cos.NewClientWithChain(cfg.COSBucket, cfg.COSRegion, chain)
 	log.Info("cos: client connected", "bucket", cfg.COSBucket, "region", cfg.COSRegion)

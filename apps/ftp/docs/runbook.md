@@ -90,3 +90,19 @@ DATABASE_URL=postgres://... ./scripts/smoke.sh
 kubectl logs -n <ns> deploy/ftp-server | grep -E 'cos:|cred'
 ```
 You should see no `no credential source` lines and STS calls limited to once per ~50 min per pod.
+
+### 2026-09-16 — STS returns empty credentials despite valid token (X-TC-Region missing)
+
+**Symptom.** Pod identity wired correctly (`TKE_ROLE_ARN`+`TKE_WEB_IDENTITY_TOKEN_FILE` set, JWT decodes, `aud=sts.cloud.tencent.com`, role-arn binding valid). `Chain.Get` still errors `cos: no credential source available`. Direct `curl` to `https://sts.tencentcloudapi.com/` from inside the pod returns:
+```
+{"Response":{"Error":{"Code":"MissingParameter","Message":"The request is missing the required parameter `Region`."},"RequestId":"…"}}
+```
+
+**Root cause.** `oidcSTS.Get` reads `TKE_REGION` into the struct field but never sends it as a header. Tencent STS rejects with `MissingParameter`; our decoder returns empty `Credentials{}`; the empty-credentials branch surfaces as the generic "no credential source available" to callers — same observable shape as the boot-fail case above but a totally different cause.
+
+**Fix shipped.** `req.Header.Set("X-TC-Region", o.region)` added in `oidcSTS.Get`, guarded by `if o.region != ""` so non-TKE paths keep working. Verified live by running the same request twice (`X-TC-Region: ap-bangkok` omitted vs present); only the second returns `Token`+`TmpSecretId`+`TmpSecretKey`.
+
+**Detect.** New boot-time `chain.Get` validation fails fast with the real STS error string. Look for `cos: credential chain validated source=STS` in startup logs; absence = chain didn't reach STS at boot.
+
+**Also added.** `cos.WebIdentityClaims()` decodes the mounted JWT payload (no signature verify) and logs `sub`/`iss`/`role_arn` at boot so the CAM/k8s SA identity actually being presented is visible in `kubectl logs`.
+

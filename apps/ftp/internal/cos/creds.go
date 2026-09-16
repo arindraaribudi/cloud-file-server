@@ -3,6 +3,7 @@ package cos
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -189,6 +190,34 @@ func HasTKEPodIdentity() bool {
 	return os.Getenv("TKE_ROLE_ARN") != "" && os.Getenv("TKE_WEB_IDENTITY_TOKEN_FILE") != ""
 }
 
+// WebIdentityClaims decodes (without signature verification — the token is
+// only ever sent to Tencent STS, never trusted locally) the JWT payload of
+// the mounted web-identity token. Used for startup diagnostics to log which
+// CAM/k8s identity ("sub") is actually being presented to STS.
+func WebIdentityClaims() (map[string]any, error) {
+	tokenFile := os.Getenv("TKE_WEB_IDENTITY_TOKEN_FILE")
+	if tokenFile == "" {
+		return nil, errors.New("TKE_WEB_IDENTITY_TOKEN_FILE not set")
+	}
+	tok, err := os.ReadFile(tokenFile)
+	if err != nil {
+		return nil, fmt.Errorf("read web-identity token: %w", err)
+	}
+	parts := strings.Split(strings.TrimSpace(string(tok)), ".")
+	if len(parts) != 3 {
+		return nil, errors.New("malformed JWT web-identity token")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("decode jwt payload: %w", err)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil, fmt.Errorf("unmarshal jwt claims: %w", err)
+	}
+	return claims, nil
+}
+
 // oidcSTS performs AssumeRoleWithWebIdentity against Tencent Cloud STS using
 // the OIDC token mounted by TKE pod identity. Uses the public endpoint with
 // `Authorization: SKIP` (sigv3) so no static key is required for the STS call.
@@ -229,6 +258,9 @@ func (o *oidcSTS) Get(ctx context.Context) (creds, error) {
 	req.Header.Set("X-TC-Action", "AssumeRoleWithWebIdentity")
 	req.Header.Set("X-TC-Version", "2018-08-13")
 	req.Header.Set("X-TC-Timestamp", fmt.Sprintf("%d", time.Now().Unix()))
+	if o.region != "" {
+		req.Header.Set("X-TC-Region", o.region)
+	}
 	req.Header.Set("Authorization", "SKIP")
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
