@@ -199,7 +199,7 @@ func orderChain(der [][]byte) [][]byte {
 	// is present in the parsed set OR is itself self-signed. To keep this
 	// simple, find the cert whose issuer matches no other cert's subject in
 	// the set (it chains up to a root not present here).
-	var start int = -1
+	start := -1
 	for i, c := range parsed {
 		if _, ok := bySubject[c.Issuer.String()]; !ok {
 			start = i
@@ -210,10 +210,7 @@ func orderChain(der [][]byte) [][]byte {
 		start = 0
 	}
 	cur := parsed[start]
-	for {
-		if isSelfSigned(cur) || used[start] {
-			break
-		}
+	for !isSelfSigned(cur) && !used[start] {
 		ordered = append(ordered, cur.Raw)
 		used[start] = true
 		nextIssuer := cur.Issuer.String()
