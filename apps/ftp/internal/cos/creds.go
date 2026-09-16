@@ -38,6 +38,12 @@ type Chain struct {
 	curr creds
 	src  string
 	exp  time.Time
+
+	// OnRefresh, if set, is invoked once per actual credential resolution
+	// (cache hits are not reported). source is "STS" or "AKSK" on success,
+	// empty on failure. Used by the FTP server to emit CRED_REFRESH audit
+	// events for ops debugging of credential-chain health.
+	OnRefresh func(source string, success bool, err error)
 }
 
 func newChain(sts stsClient, st stsClient, usePod bool, refreshRatio float64) *Chain {
@@ -104,31 +110,58 @@ func (c *Chain) Invalidate() {
 
 func (c *Chain) Get(ctx context.Context) (creds, string, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	// Cache hit while more than (1-refreshRatio) of the assumed 1h lifetime remains.
 	// default 0.8 → refresh in the last 12 min so STS sessions rotate before expiry.
 	if c.curr.ID != "" && time.Until(c.exp) > time.Duration(float64(time.Hour)*(1-c.refreshRatio)) {
-		return c.curr, c.src, nil
+		got, src := c.curr, c.src
+		c.mu.Unlock()
+		return got, src, nil
 	}
+	var (
+		got     creds
+		src     string
+		err     error
+		stsErr  error
+		usedSTS bool
+	)
 	if c.usePodIdentity && c.sts != nil {
-		got, err := c.sts.Get(ctx)
-		if err == nil {
+		got, stsErr = c.sts.Get(ctx)
+		if stsErr == nil {
 			c.curr = got
 			c.src = "STS"
 			c.exp = got.Expiry
-			return got, "STS", nil
+			usedSTS = true
+			src = "STS"
 		}
 	}
-	if c.static != nil {
-		got, err := c.static.Get(ctx)
+	if !usedSTS && c.static != nil {
+		got, err = c.static.Get(ctx)
 		if err == nil {
 			c.curr = got
 			c.src = "AKSK"
 			c.exp = got.Expiry
-			return got, "AKSK", nil
+			src = "AKSK"
 		}
 	}
-	return creds{}, "", errors.New("cos: no credential source available")
+	if src == "" {
+		if stsErr != nil {
+			err = stsErr
+		} else {
+			err = errors.New("cos: no credential source available")
+		}
+	}
+	c.mu.Unlock()
+	c.notify(src, err == nil, err)
+	return got, src, err
+}
+
+// notify fires the OnRefresh hook (if set) outside the mutex so callbacks
+// can safely re-enter Chain or block on I/O.
+func (c *Chain) notify(src string, ok bool, err error) {
+	if c.OnRefresh == nil {
+		return
+	}
+	c.OnRefresh(src, ok, err)
 }
 
 func ToCOSURL(bucket, region string, c creds) *cos.BaseURL {

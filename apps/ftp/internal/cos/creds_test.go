@@ -47,6 +47,60 @@ func TestChainFailsWhenNoFallback(t *testing.T) {
 	}
 }
 
+func TestChainNotifiesOnRefresh(t *testing.T) {
+	type call struct{ src string; ok bool }
+	var calls []call
+	sts := &fakeSTS{out: creds{ID: "STS_ID", Expiry: time.Now().Add(time.Hour)}}
+	st := &fakeStatic{id: "ST_ID", key: "ST_KEY"}
+	c := newChain(sts, st, true, 0.8)
+	c.OnRefresh = func(src string, ok bool, _ error) { calls = append(calls, call{src, ok}) }
+
+	if _, _, err := c.Get(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || calls[0] != (call{"STS", true}) {
+		t.Fatalf("want 1 STS-success call, got %+v", calls)
+	}
+
+	// STS fails next time → AKSK fallback (invalidate so cache doesn't hide the failure)
+	sts.err = errors.New("sts down")
+	c.Invalidate()
+	if _, _, err := c.Get(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 || calls[1] != (call{"AKSK", true}) {
+		t.Fatalf("want AKSK fallback call, got %+v", calls)
+	}
+
+	// Both fail → ok=false, empty src
+	sts.err = errors.New("sts down")
+	st.id = ""
+	c.Invalidate()
+	if _, _, err := c.Get(context.Background()); err == nil {
+		t.Fatal("expected fail")
+	}
+	if len(calls) != 3 || calls[2].ok {
+		t.Fatalf("want failure call, got %+v", calls)
+	}
+
+	// Restore working state, populate cache, then verify cache hits stay silent
+	sts.err = nil
+	sts.out = creds{ID: "STS_ID", Expiry: time.Now().Add(time.Hour)}
+	st.id = "ST_ID"
+	st.key = "ST_KEY"
+	c.Invalidate()
+	if _, _, err := c.Get(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	calls = nil
+	for i := 0; i < 5; i++ {
+		_, _, _ = c.Get(context.Background())
+	}
+	if len(calls) != 0 {
+		t.Errorf("cache hit should not notify, got %d calls", len(calls))
+	}
+}
+
 func TestNewChainFromEnv_StaticOnly_OK(t *testing.T) {
 	// TKE_WEB_IDENTITY_TOKEN_FILE unset → HasTKEPodIdentity()=false, static carries
 	t.Setenv("TKE_ROLE_ARN", "")

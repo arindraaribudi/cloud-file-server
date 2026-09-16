@@ -78,6 +78,24 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	chain.OnRefresh = func(src string, ok bool, refreshErr error) {
+		attrs := []any{"bucket", cfg.COSBucket, "region", cfg.COSRegion, "source", src}
+		if ok {
+			log.Info("cred refresh ok", attrs...)
+		} else {
+			log.Warn("cred refresh failed", append(attrs, "err", refreshErr)...)
+		}
+		detail := map[string]any{"bucket": cfg.COSBucket, "region": cfg.COSRegion}
+		if refreshErr != nil {
+			detail["err"] = refreshErr.Error()
+		}
+		auditLog.Log(audit.Event{
+			Action: "CRED_REFRESH",
+			Source: src,
+			Success: ok,
+			Detail: detail,
+		})
+	}
 	log.Info("cos: credential chain ready", "tke_pod_identity", cos.HasTKEPodIdentity(), "static_fallback", chain.HasStatic())
 	client := cos.NewClientWithChain(cfg.COSBucket, cfg.COSRegion, chain)
 	log.Info("cos: client connected", "bucket", cfg.COSBucket, "region", cfg.COSRegion)
