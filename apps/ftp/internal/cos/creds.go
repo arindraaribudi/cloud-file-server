@@ -45,25 +45,42 @@ func newChain(sts stsClient, st stsClient, usePod bool, refreshRatio float64) *C
 }
 
 // NewChainFromEnv builds a credential chain from env vars. Pod identity is
-// attempted when COS_USE_POD_IDENTITY=true AND TKE pod-identity env vars are
-// set (TKE_ROLE_ARN + TKE_WEB_IDENTITY_TOKEN_FILE). The static AK/SK from
-// COS_STATIC_SECRET_ID/COS_STATIC_SECRET_KEY is always configured as the
-// fallback so STS errors don't break boot. Returns an error only when neither
-// source is usable.
-func NewChainFromEnv(ctx context.Context, usePodIdentity bool, id, key, token string, refreshRatio float64) (*Chain, error) {
-	c := &Chain{usePodIdentity: usePodIdentity, refreshRatio: refreshRatio, static: &envStatic{id: id, key: key, tok: token}}
+// auto-detected from the TKE_WEB_IDENTITY_TOKEN_FILE env var (set by the TKE
+// pod-identity webhook when a SA is bound). The static AK/SK from
+// COS_STATIC_SECRET_ID/COS_STATIC_SECRET_KEY is OPTIONAL — when unset, pod
+// identity becomes the only source and must be available at boot.
+//
+// Boot-fail matrix:
+//   TKE_WEB_IDENTITY_TOKEN_FILE set, static present        → ok (STS primary, static fallback)
+//   TKE_WEB_IDENTITY_TOKEN_FILE set, static empty          → ok (pod identity only)
+//   TKE_WEB_IDENTITY_TOKEN_FILE unset, static present      → ok (static only)
+//   TKE_WEB_IDENTITY_TOKEN_FILE unset, static empty        → fail
+func NewChainFromEnv(ctx context.Context, id, key, token string, refreshRatio float64) (*Chain, error) {
+	staticAvailable := id != "" && key != ""
+	usePodIdentity := HasTKEPodIdentity()
+
+	var sts stsClient
 	if usePodIdentity {
 		real, err := newOIDCSTS(ctx)
-		if err != nil {
-			c.sts = &noopSTS{err: err}
-		} else {
-			c.sts = real
+		switch {
+		case err != nil && !staticAvailable:
+			return nil, fmt.Errorf("pod identity expected (TKE_WEB_IDENTITY_TOKEN_FILE set) but unavailable and COS_STATIC_SECRET_ID/KEY is unset: %w", err)
+		case err != nil:
+			// pod identity best-effort; static will carry the chain at runtime
+			sts = &noopSTS{err: err}
+		default:
+			sts = real
 		}
+	} else if !staticAvailable {
+		return nil, errors.New("no credential source configured: set COS_STATIC_SECRET_ID + COS_STATIC_SECRET_KEY, or run with TKE pod identity (TKE_WEB_IDENTITY_TOKEN_FILE mounted)")
 	}
-	if !usePodIdentity && (id == "" || key == "") {
-		return nil, errors.New("no credential source configured")
-	}
-	return c, nil
+
+	return &Chain{
+		usePodIdentity: usePodIdentity,
+		refreshRatio:   refreshRatio,
+		sts:            sts,
+		static:         &envStatic{id: id, key: key, tok: token},
+	}, nil
 }
 
 // HasStatic reports whether the chain has a usable static (SK/AK) fallback.
@@ -75,10 +92,22 @@ func (c *Chain) HasStatic() bool {
 	return err == nil
 }
 
+// Invalidate drops the cached credential snapshot so the next Get re-resolves.
+// Use after an auth error from the cloud to force re-fetch on retry.
+func (c *Chain) Invalidate() {
+	c.mu.Lock()
+	c.curr = creds{}
+	c.src = ""
+	c.exp = time.Time{}
+	c.mu.Unlock()
+}
+
 func (c *Chain) Get(ctx context.Context) (creds, string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.curr.ID != "" && time.Until(c.exp) > 0 && time.Until(c.exp) > time.Duration(float64(c.exp.Sub(time.Now().Add(-time.Hour)))*c.refreshRatio) {
+	// Cache hit while more than (1-refreshRatio) of the assumed 1h lifetime remains.
+	// default 0.8 → refresh in the last 12 min so STS sessions rotate before expiry.
+	if c.curr.ID != "" && time.Until(c.exp) > time.Duration(float64(time.Hour)*(1-c.refreshRatio)) {
 		return c.curr, c.src, nil
 	}
 	if c.usePodIdentity && c.sts != nil {

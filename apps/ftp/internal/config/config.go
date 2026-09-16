@@ -23,7 +23,6 @@ type Config struct {
 	FTPAllowPlain       bool
 	FTPDefaultAllowActive bool
 	FTPDefaultRefuseOverwrite bool
-	COSUsePodIdentity   bool
 	COSStaticSecretID      string
 	COSStaticSecretKey     string
 	COSStaticSessionToken  string
@@ -63,7 +62,6 @@ func Load() (*Config, error) {
 		FTPAllowPlain:              getenv("FTP_ALLOW_PLAIN", "false") == "true",
 		FTPDefaultAllowActive:      getenv("FTP_DEFAULT_ALLOW_ACTIVE", "false") == "true",
 		FTPDefaultRefuseOverwrite:  getenv("FTP_DEFAULT_REFUSE_OVERWRITE", "false") == "true",
-		COSUsePodIdentity:          getenv("COS_USE_POD_IDENTITY", "true") == "true",
 		COSStaticSecretID:          os.Getenv("COS_STATIC_SECRET_ID"),
 		COSStaticSecretKey:         os.Getenv("COS_STATIC_SECRET_KEY"),
 		COSStaticSessionToken:      os.Getenv("COS_STATIC_SESSION_TOKEN"),

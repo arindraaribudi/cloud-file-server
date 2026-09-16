@@ -74,18 +74,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 	auditLog := audit.New(pool, log)
 	defer func() { _ = auditLog.Close(context.Background()) }()
 
-	chain, err := cos.NewChainFromEnv(ctx, cfg.COSUsePodIdentity, cfg.COSStaticSecretID, cfg.COSStaticSecretKey, cfg.COSStaticSessionToken, cfg.STSRefreshRatio)
+	chain, err := cos.NewChainFromEnv(ctx, cfg.COSStaticSecretID, cfg.COSStaticSecretKey, cfg.COSStaticSessionToken, cfg.STSRefreshRatio)
 	if err != nil {
 		return err
 	}
-	if !cfg.COSUsePodIdentity && !chain.HasStatic() {
-		return fmt.Errorf("no credential source: set COS_STATIC_SECRET_ID + COS_STATIC_SECRET_KEY, or enable COS_USE_POD_IDENTITY with TKE_ROLE_ARN + TKE_WEB_IDENTITY_TOKEN_FILE")
-	}
-	if cfg.COSUsePodIdentity {
-		log.Info("cos: credential chain ready", "tke_pod_identity", cos.HasTKEPodIdentity(), "static_fallback", chain.HasStatic())
-	} else {
-		log.Info("cos: using static credentials only")
-	}
+	log.Info("cos: credential chain ready", "tke_pod_identity", cos.HasTKEPodIdentity(), "static_fallback", chain.HasStatic())
 	client := cos.NewClientWithChain(cfg.COSBucket, cfg.COSRegion, chain)
 	log.Info("cos: client connected", "bucket", cfg.COSBucket, "region", cfg.COSRegion)
 

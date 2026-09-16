@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -79,4 +80,41 @@ func (c *Client) setHTTP(creds creds) {
 	}
 	u := &url.URL{Scheme: "https", Host: c.Bucket + ".cos." + c.Region + ".myqcloud.com"}
 	c.cos = cos.NewClient(&cos.BaseURL{BucketURL: u}, c.http)
+}
+
+// do runs op. If op returns an auth-class error (bad signature, expired token,
+// unknown access key), the chain cache is invalidated and op is retried once
+// with fresh credentials. Any other error, or a failed retry, is returned as-is.
+func (c *Client) do(ctx context.Context, op func() error) error {
+	err := op()
+	if err == nil || !isAuthErr(err) || c.Chain == nil {
+		return err
+	}
+	c.Chain.Invalidate()
+	if rerr := c.refresh(ctx); rerr != nil {
+		return err // keep original auth error; chain itself is broken
+	}
+	return op()
+}
+
+// isAuthErr matches the credential-error codes COS returns when the request
+// was rejected for authentication reasons. Substring match on Error() — the
+// COS SDK wraps server responses without exposing a typed sentinel.
+func isAuthErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	for _, sub := range []string{
+		"SignatureDoesNotMatch",
+		"ExpiredToken",
+		"TokenExpired",
+		"InvalidAccessKeyId",
+		"InvalidToken",
+	} {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }

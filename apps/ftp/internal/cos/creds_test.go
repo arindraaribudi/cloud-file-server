@@ -47,12 +47,108 @@ func TestChainFailsWhenNoFallback(t *testing.T) {
 	}
 }
 
+func TestNewChainFromEnv_StaticOnly_OK(t *testing.T) {
+	// TKE_WEB_IDENTITY_TOKEN_FILE unset → HasTKEPodIdentity()=false, static carries
+	t.Setenv("TKE_ROLE_ARN", "")
+	t.Setenv("TKE_WEB_IDENTITY_TOKEN_FILE", "")
+	_, err := NewChainFromEnv(context.Background(), "AKID", "SECRET", "", 0.8)
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+}
+
+func TestNewChainFromEnv_NeitherSource_Fails(t *testing.T) {
+	t.Setenv("TKE_ROLE_ARN", "")
+	t.Setenv("TKE_WEB_IDENTITY_TOKEN_FILE", "")
+	_, err := NewChainFromEnv(context.Background(), "", "", "", 0.8)
+	if err == nil {
+		t.Fatal("expected boot fail when neither source is configured")
+	}
+}
+
+func TestNewChainFromEnv_PodIdentityOnly_OK(t *testing.T) {
+	// TKE_WEB_IDENTITY_TOKEN_FILE set → HasTKEPodIdentity()=true, static empty is fine
+	t.Setenv("TKE_ROLE_ARN", "qcs::cam::uin/1:role/n")
+	t.Setenv("TKE_WEB_IDENTITY_TOKEN_FILE", filepath.Join(t.TempDir(), "tok"))
+	_, err := NewChainFromEnv(context.Background(), "", "", "", 0.8)
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+}
+
+func TestNewChainFromEnv_BothSources_OK(t *testing.T) {
+	// both present → STS primary, static fallback
+	t.Setenv("TKE_ROLE_ARN", "qcs::cam::uin/1:role/n")
+	t.Setenv("TKE_WEB_IDENTITY_TOKEN_FILE", filepath.Join(t.TempDir(), "tok"))
+	_, err := NewChainFromEnv(context.Background(), "AKID", "SECRET", "", 0.8)
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+}
+
+func TestChainCachesValidCreds(t *testing.T) {
+	sts := &fakeSTS{out: creds{ID: "STS_ID", Key: "STS_KEY", Expiry: time.Now().Add(time.Hour)}}
+	st := &fakeStatic{id: "ST_ID", key: "ST_KEY"}
+	c := newChain(sts, st, true, 0.8)
+
+	for i := 0; i < 5; i++ {
+		if _, _, err := c.Get(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if sts.calls != 1 {
+		t.Errorf("expected 1 STS call (cached after), got %d", sts.calls)
+	}
+}
+
+func TestChainRefreshesNearExpiry(t *testing.T) {
+	sts := &fakeSTS{out: creds{ID: "STS_ID", Expiry: time.Now().Add(5 * time.Minute)}}
+	c := newChain(sts, &fakeStatic{id: "ST", key: "K"}, true, 0.8)
+
+	if _, _, err := c.Get(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.Get(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sts.calls != 2 {
+		t.Errorf("expected refresh near expiry, got %d calls", sts.calls)
+	}
+}
+
+func TestChainInvalidateForcesReFetch(t *testing.T) {
+	sts := &fakeSTS{out: creds{ID: "STS_ID", Expiry: time.Now().Add(time.Hour)}}
+	c := newChain(sts, &fakeStatic{id: "S", key: "K"}, true, 0.8)
+
+	if _, _, err := c.Get(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.Get(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sts.calls != 1 {
+		t.Fatalf("expected cache hit, got %d calls", sts.calls)
+	}
+	c.Invalidate()
+	if _, _, err := c.Get(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sts.calls != 2 {
+		t.Errorf("expected refresh after Invalidate, got %d calls", sts.calls)
+	}
+}
+
 type fakeSTS struct {
 	out creds
 	err error
+
+	calls int
 }
 
-func (f *fakeSTS) Get(ctx context.Context) (creds, error) { return f.out, f.err }
+func (f *fakeSTS) Get(ctx context.Context) (creds, error) {
+	f.calls++
+	return f.out, f.err
+}
 
 type fakeStatic struct{ id, key string }
 

@@ -34,7 +34,12 @@ func (c *Client) List(ctx context.Context, prefix string) ([]Entry, error) {
 	if !strings.HasSuffix(prefix, "/") && prefix != "" {
 		prefix += "/"
 	}
-	res, _, err := c.cos.Bucket.Get(ctx, &cos.BucketGetOptions{Prefix: prefix, Delimiter: "/"})
+	var res *cos.BucketGetResult
+	err := c.do(ctx, func() error {
+		var ierr error
+		res, _, ierr = c.cos.Bucket.Get(ctx, &cos.BucketGetOptions{Prefix: prefix, Delimiter: "/"})
+		return ierr
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +61,12 @@ func (c *Client) Head(ctx context.Context, key string) (*Entry, error) {
 	if err := c.refresh(ctx); err != nil {
 		return nil, err
 	}
-	resp, err := c.cos.Object.Head(ctx, key, &cos.ObjectHeadOptions{})
+	var resp *cos.Response
+	err := c.do(ctx, func() error {
+		var ierr error
+		resp, ierr = c.cos.Object.Head(ctx, key, &cos.ObjectHeadOptions{})
+		return ierr
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +84,12 @@ func (c *Client) Get(ctx context.Context, key string, offset, length int64) (io.
 	} else if offset > 0 {
 		opt.Range = fmt.Sprintf("bytes=%d-", offset)
 	}
-	resp, err := c.cos.Object.Get(ctx, key, opt)
+	var resp *cos.Response
+	err := c.do(ctx, func() error {
+		var ierr error
+		resp, ierr = c.cos.Object.Get(ctx, key, opt)
+		return ierr
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -86,22 +101,28 @@ func (c *Client) Put(ctx context.Context, key string, body io.Reader, size int64
 		return err
 	}
 	_ = size // ponytail: SDK derives size from reader; size param retained for API symmetry with T13
-	_, err := c.cos.Object.Put(ctx, key, body, &cos.ObjectPutOptions{})
-	return err
+	return c.do(ctx, func() error {
+		_, err := c.cos.Object.Put(ctx, key, body, &cos.ObjectPutOptions{})
+		return err
+	})
 }
 
 func (c *Client) Delete(ctx context.Context, key string) error {
 	if err := c.refresh(ctx); err != nil {
 		return err
 	}
-	_, err := c.cos.Object.Delete(ctx, key)
-	return err
+	return c.do(ctx, func() error {
+		_, err := c.cos.Object.Delete(ctx, key)
+		return err
+	})
 }
 
 func (c *Client) Copy(ctx context.Context, src, dst string) error {
 	if err := c.refresh(ctx); err != nil {
 		return err
 	}
-	_, _, err := c.cos.Object.Copy(ctx, dst, src, &cos.ObjectCopyOptions{})
-	return err
+	return c.do(ctx, func() error {
+		_, _, err := c.cos.Object.Copy(ctx, dst, src, &cos.ObjectCopyOptions{})
+		return err
+	})
 }
