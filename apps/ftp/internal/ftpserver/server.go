@@ -130,35 +130,34 @@ func (s *Server) GetTLSConfig() (*tls.Config, error) {
 }
 
 // loadCertChain reads certFile (PEM: first CERTIFICATE block is leaf, rest are
-// intermediates) and keyFile, returns a tls.Certificate whose Certificate slice
-// is [leaf, intermediates...]. Go's tls.LoadX509KeyPair drops everything past
-// the first block, which makes clients without cached intermediates fail
-// chain verification — FileZilla then warns "Unknown certificate".
+// intermediates) and keyFile. Returns a tls.Certificate whose Certificate slice
+// is [leaf, intermediates...] in RFC 5246 order (each cert directly certifies
+// the previous one), stopping before any self-signed root. Go's
+// tls.LoadX509KeyPair drops everything past the first block, which makes
+// clients without cached intermediates fail chain verification. Including the
+// self-signed root in the chain makes strict clients (FileZilla) reject with
+// "Server sent unsorted certificate chain".
 func loadCertChain(certFile, keyFile string) (tls.Certificate, error) {
 	pemBytes, err := os.ReadFile(certFile)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	var leafDER []byte
-	var chain [][]byte
+	var blocks [][]byte
 	for {
 		var block *pem.Block
 		block, pemBytes = pem.Decode(pemBytes)
 		if block == nil {
 			break
 		}
-		if block.Type != "CERTIFICATE" {
-			continue
-		}
-		if leafDER == nil {
-			leafDER = block.Bytes
-		} else {
-			chain = append(chain, block.Bytes)
+		if block.Type == "CERTIFICATE" {
+			blocks = append(blocks, block.Bytes)
 		}
 	}
-	if leafDER == nil {
+	if len(blocks) == 0 {
 		return tls.Certificate{}, errors.New("no certificate in " + certFile)
 	}
+	leafDER := blocks[0]
+	ordered := orderChain(blocks[1:])
 	leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER})
 	keyPEM, err := os.ReadFile(keyFile)
 	if err != nil {
@@ -168,8 +167,77 @@ func loadCertChain(certFile, keyFile string) (tls.Certificate, error) {
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	cert.Certificate = append([][]byte{leafDER}, chain...)
+	cert.Certificate = append([][]byte{leafDER}, ordered...)
 	return cert, nil
+}
+
+// orderChain sorts DER certs into RFC 5246 order: each cert's subject must
+// equal the previous cert's issuer, starting from leaf. Self-signed certs
+// (root) are dropped — clients already trust them locally. Duplicates are
+// skipped.
+func orderChain(der [][]byte) [][]byte {
+	parsed := make([]*x509.Certificate, 0, len(der))
+	for _, b := range der {
+		if c, err := x509.ParseCertificate(b); err == nil {
+			parsed = append(parsed, c)
+		}
+	}
+	// Build subject -> index map (skip duplicates).
+	bySubject := map[string][]int{}
+	for i, c := range parsed {
+		bySubject[c.Subject.String()] = append(bySubject[c.Subject.String()], i)
+	}
+	// Walk from the leaf we were given; we don't have the leaf's subject here,
+	// so find the first cert whose issuer matches no other cert's subject in
+	// the set (i.e., a top-level intermediate). Caller's chain starts after leaf,
+	// so the first cert we emit must sign the leaf — but we don't have the leaf
+	// subject here either. Instead: emit certs in dependency order, stopping at
+	// the first self-signed one.
+	used := make([]bool, len(parsed))
+	var ordered [][]byte
+	// Pick a starting point: any cert that is not self-signed AND whose issuer
+	// is present in the parsed set OR is itself self-signed. To keep this
+	// simple, find the cert whose issuer matches no other cert's subject in
+	// the set (it chains up to a root not present here).
+	var start int = -1
+	for i, c := range parsed {
+		if _, ok := bySubject[c.Issuer.String()]; !ok {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		start = 0
+	}
+	cur := parsed[start]
+	for {
+		if isSelfSigned(cur) || used[start] {
+			break
+		}
+		ordered = append(ordered, cur.Raw)
+		used[start] = true
+		nextIssuer := cur.Issuer.String()
+		if _, ok := bySubject[nextIssuer]; !ok {
+			break
+		}
+		next := -1
+		for _, idx := range bySubject[nextIssuer] {
+			if !used[idx] {
+				next = idx
+				break
+			}
+		}
+		if next < 0 {
+			break
+		}
+		cur = parsed[next]
+		start = next
+	}
+	return ordered
+}
+
+func isSelfSigned(c *x509.Certificate) bool {
+	return c != nil && c.Subject.String() == c.Issuer.String()
 }
 
 func (s *Server) Start(_ context.Context) error {
