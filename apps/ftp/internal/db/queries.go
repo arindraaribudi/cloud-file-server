@@ -11,7 +11,7 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
-const ftpUserColumns = "id, username, password_hash, root_folder, cos_bucket, COALESCE(cos_region, ''), enabled, allow_active_mode, refuse_overwrite, max_sessions, created_at, updated_at, deleted_at"
+const ftpUserColumns = "id, username, password_hash, root_folder, cos_bucket, COALESCE(cos_region, ''), enabled, allow_active_mode, refuse_overwrite, max_sessions, created_at, updated_at, deleted_at, last_login"
 
 type FTPUser struct {
 	ID              int64      `json:"id"`
@@ -27,6 +27,7 @@ type FTPUser struct {
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
 	DeletedAt       *time.Time `json:"deleted_at,omitempty"`
+	LastLogin       *time.Time `json:"last_login"`
 }
 
 type AdminUser struct {
@@ -54,11 +55,29 @@ func GetFTPUserByUsername(ctx context.Context, pool *pgxpool.Pool, name string) 
 		FROM ftp_users WHERE username=$1 AND deleted_at IS NULL`, name).
 		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.RootFolder, &u.COSBucket, &u.COSRegion,
 			&u.Enabled, &u.AllowActiveMode, &u.RefuseOverwrite, &u.MaxSessions,
-			&u.CreatedAt, &u.UpdatedAt, &u.DeletedAt)
+			&u.CreatedAt, &u.UpdatedAt, &u.DeletedAt, &u.LastLogin)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	return u, err
+}
+
+// GetFTPUserByID fetches an FTP user by primary key. Returns ErrNotFound
+// if no row matches (including soft-deleted users).
+func GetFTPUserByID(ctx context.Context, pool *pgxpool.Pool, id int64) (*FTPUser, error) {
+	u := &FTPUser{}
+	err := pool.QueryRow(ctx,
+		`SELECT `+ftpUserColumns+` FROM ftp_users WHERE id=$1 AND deleted_at IS NULL`, id).
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.RootFolder, &u.COSBucket,
+			&u.COSRegion, &u.Enabled, &u.AllowActiveMode, &u.RefuseOverwrite,
+			&u.MaxSessions, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt, &u.LastLogin)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return u, nil
 }
 
 func UpdateFTPUser(ctx context.Context, pool *pgxpool.Pool, u *FTPUser) error {
@@ -81,6 +100,11 @@ func SetFTPUserPassword(ctx context.Context, pool *pgxpool.Pool, id int64, hash 
 	return err
 }
 
+func SetFTPUserLastLogin(ctx context.Context, pool *pgxpool.Pool, id int64) error {
+	_, err := pool.Exec(ctx, `UPDATE ftp_users SET last_login=now() WHERE id=$1`, id)
+	return err
+}
+
 func ListFTPUsers(ctx context.Context, pool *pgxpool.Pool, search string, limit, offset int) ([]*FTPUser, error) {
 	rows, err := pool.Query(ctx, `
 		SELECT `+ftpUserColumns+`
@@ -95,7 +119,7 @@ func ListFTPUsers(ctx context.Context, pool *pgxpool.Pool, search string, limit,
 		u := &FTPUser{}
 		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.RootFolder, &u.COSBucket, &u.COSRegion,
 			&u.Enabled, &u.AllowActiveMode, &u.RefuseOverwrite, &u.MaxSessions,
-			&u.CreatedAt, &u.UpdatedAt, &u.DeletedAt); err != nil {
+			&u.CreatedAt, &u.UpdatedAt, &u.DeletedAt, &u.LastLogin); err != nil {
 			return nil, err
 		}
 		out = append(out, u)

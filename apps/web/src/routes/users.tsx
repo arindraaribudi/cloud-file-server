@@ -15,6 +15,14 @@ import {
 import { api, deleteUser, updateUser, type FTPUser } from "../lib/api";
 import { Stamp } from "../components/Stamp";
 
+function FolderIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+    </svg>
+  );
+}
+
 function EditIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -103,6 +111,10 @@ export function Users() {
         header: "Created",
         cell: (info) => <span className="mono">{info.getValue()}</span>,
       }),
+      columnHelper.accessor("last_login", {
+        header: "Last login",
+        cell: (info) => <span className="mono">{info.getValue() ?? "Never"}</span>,
+      }),
       columnHelper.display({
         id: "actions",
         header: "",
@@ -110,6 +122,13 @@ export function Users() {
           const u = info.row.original;
           return (
             <div className="row-actions">
+              <button
+                aria-label={`Browse files for ${u.username}`}
+                title="Browse files"
+                onClick={() => nav({ to: "/files/$userId", from: "/users", params: { userId: String(u.id) } })}
+              >
+                <FolderIcon />
+              </button>
               <button
                 aria-label={`Edit ${u.username}`}
                 title="Edit"

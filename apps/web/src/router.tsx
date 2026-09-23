@@ -7,6 +7,7 @@ import { UserNew } from "./routes/user-new";
 import { UserEdit } from "./routes/user-edit";
 import { UserPassword } from "./routes/user-password";
 import { Audit } from "./routes/audit";
+import { Files } from "./routes/files";
 
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
@@ -68,6 +69,15 @@ const auditRoute = createRoute({
   component: Audit,
 });
 
+const filesRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: "/files/$userId",
+  component: Files,
+  validateSearch: (search: Record<string, unknown>): { path?: string } => ({
+    path: typeof search.path === "string" ? search.path : undefined,
+  }),
+});
+
 export const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
@@ -79,6 +89,7 @@ export const router = createRouter({
       userEditRoute,
       userPasswordRoute,
       auditRoute,
+      filesRoute,
     ]),
   ]),
   defaultPreload: "intent",

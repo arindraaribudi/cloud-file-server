@@ -23,6 +23,8 @@ type API struct {
 	COSRegion          string
 	COSClient          *cos.Client
 	DefaultRootPrefix  string
+	FTPAddress         string
+	FTPPublicAddress   string
 	oidc               *oidcAuth
 }
 
@@ -61,6 +63,8 @@ func (a *API) Routes() http.Handler {
 		r.Get("/api/v1/folders", a.listFolders)
 		r.Get("/api/v1/audit", a.queryAudit)
 		r.Get("/api/v1/audit/export", a.exportAuditCSV)
+		r.Get("/api/v1/files/{userId}", a.listFilesRoute)
+		r.Get("/api/v1/files/{userId}/download", a.downloadFileRoute)
 
 		r.Group(func(r chi.Router) {
 			r.Use(a.RequireRole("admin"))

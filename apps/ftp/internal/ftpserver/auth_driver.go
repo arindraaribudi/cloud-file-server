@@ -61,6 +61,12 @@ func (a *DBAuthenticator) Authenticate(user, pass string) (*db.FTPUser, error) {
 		return nil, errAuthFailed
 	}
 	a.Lockout.Reset(user)
+	if err := db.SetFTPUserLastLogin(dbCtx, a.Pool, u.ID); err != nil {
+		a.Audit.Log(audit.Event{
+			Username: user, Action: "LOGIN", Success: false,
+			Detail: map[string]any{"reason": "last_login_update_failed", "err": err.Error()},
+		})
+	}
 	a.Audit.Log(audit.Event{
 		Username: user, Action: "LOGIN", Success: true,
 	})

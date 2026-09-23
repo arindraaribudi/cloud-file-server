@@ -42,8 +42,18 @@ export function AuthedLayout() {
     <div className="shell">
       <header className="shell-header">
         <div className="brand">
-          Cloud File Server
-          <small>User account management</small>
+          <span className="brand-name">Cloud File Server</span>
+          {(session.ftp_address || session.ftp_public_address || session.cos_address) && (
+            <div className="brand-meta">
+              {[
+                session.ftp_address && `ftp://${session.ftp_address}`,
+                session.ftp_public_address && `ftp://${session.ftp_public_address}`,
+                session.cos_address,
+              ]
+                .filter(Boolean)
+                .join(" | ")}
+            </div>
+          )}
         </div>
         <nav className="shell-nav">
           <Link to="/users">Users</Link>

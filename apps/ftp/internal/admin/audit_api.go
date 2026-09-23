@@ -3,6 +3,7 @@ package admin
 import (
 	"encoding/csv"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -21,7 +22,7 @@ func (a *API) queryAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	offset, _ := strconv.Atoi(q.Get("offset"))
 
-	sql := `SELECT event_time, username, client_ip, session_id, action, path, bytes, success, source, detail
+	sql := `SELECT event_time, username, client_ip::text, session_id, action, path, bytes, success, source, detail
 		FROM audit_events WHERE event_time BETWEEN $1 AND $2`
 	args := []any{parseTimeOr(from, time.Now().Add(-30*24*time.Hour)), parseTimeOr(to, time.Now())}
 	i := 3
@@ -45,6 +46,7 @@ func (a *API) queryAudit(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := a.Pool.Query(r.Context(), sql, args...)
 	if err != nil {
+		slog.Error("queryAudit: query failed", "err", err, "sql", sql, "args", args)
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
@@ -63,6 +65,7 @@ func (a *API) queryAudit(w http.ResponseWriter, r *http.Request) {
 		var src *string
 		var detail []byte
 		if err := rows.Scan(&et, &uname, &cip, &sid, &act, &p, &b, &ok, &src, &detail); err != nil {
+			slog.Error("queryAudit: scan failed", "err", err)
 			http.Error(w, "internal", http.StatusInternalServerError)
 			return
 		}
@@ -81,7 +84,7 @@ func (a *API) exportAuditCSV(w http.ResponseWriter, r *http.Request) {
 	from := parseTimeOr(q.Get("from"), time.Now().Add(-30*24*time.Hour))
 	to := parseTimeOr(q.Get("to"), time.Now())
 	rows, err := a.Pool.Query(r.Context(),
-		`SELECT event_time, username, client_ip, action, path, bytes, success FROM audit_events
+		`SELECT event_time, username, client_ip::text, action, path, bytes, success FROM audit_events
 		 WHERE event_time BETWEEN $1 AND $2 ORDER BY event_time`, from, to)
 	if err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)

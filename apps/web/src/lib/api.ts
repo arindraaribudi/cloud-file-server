@@ -19,13 +19,18 @@ export type Session = {
   email: string;
   first_name: string;
   last_name: string;
+  ftp_address: string;
+  ftp_public_address: string;
+  cos_address: string;
 };
 
 export type FTPUser = {
+  id: number;
   username: string;
   root_folder: string;
   enabled: boolean;
   created_at: string;
+  last_login: string | null;
 };
 
 export type AuditEvent = {
@@ -63,4 +68,21 @@ export type FolderSuggestion = { name: string };
 export function listFolders(prefix?: string) {
   const q = prefix ? `?prefix=${encodeURIComponent(prefix)}` : "";
   return api<FolderSuggestion[]>(`/api/v1/folders${q}`);
+}
+
+export type FileEntry = {
+  name: string;
+  isDir: boolean;
+  size: number;
+  modified: string;
+};
+
+export type ListFilesResponse = {
+  prefix: string;
+  entries: FileEntry[];
+};
+
+export function listFiles(userId: string | number, prefix = ""): Promise<ListFilesResponse> {
+  const q = prefix ? `?prefix=${encodeURIComponent(prefix)}` : "";
+  return api<ListFilesResponse>(`/api/v1/files/${userId}${q}`);
 }

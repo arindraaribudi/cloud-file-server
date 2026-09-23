@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -95,6 +96,7 @@ func (a *API) oidcCallback(w http.ResponseWriter, r *http.Request) {
 
 	token, err := a.oidc.oauth2.Exchange(r.Context(), r.URL.Query().Get("code"))
 	if err != nil {
+		slog.Error("oidc token exchange failed", "err", err)
 		http.Error(w, "sso exchange failed", http.StatusUnauthorized)
 		return
 	}
