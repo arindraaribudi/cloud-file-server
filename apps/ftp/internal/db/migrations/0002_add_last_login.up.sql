@@ -1,0 +1,1 @@
+ALTER TABLE ftp_users ADD COLUMN last_login TIMESTAMPTZ;

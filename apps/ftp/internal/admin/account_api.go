@@ -11,11 +11,14 @@ import (
 func (a *API) session(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{
-		"username":   CurrentUser(r),
-		"role":       CurrentRole(r),
-		"email":      CurrentEmail(r),
-		"first_name": CurrentFirstName(r),
-		"last_name":  CurrentLastName(r),
+		"username":    CurrentUser(r),
+		"role":        CurrentRole(r),
+		"email":       CurrentEmail(r),
+		"first_name":  CurrentFirstName(r),
+		"last_name":   CurrentLastName(r),
+		"ftp_address":        a.FTPAddress,
+		"ftp_public_address": a.FTPPublicAddress,
+		"cos_address":        "https://" + a.COSBucket + ".cos." + a.COSRegion + ".myqcloud.com",
 	})
 }
 

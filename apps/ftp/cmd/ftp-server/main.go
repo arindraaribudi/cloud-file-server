@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -157,6 +158,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// Admin API + metrics on cfg.AdminListen (default :8080).
 	adminClient := cos.NewClientWithChain(cfg.COSBucket, cfg.COSRegion, chain)
 	adminAPI := admin.New(pool, cfg.AdminCookieSecure, cfg.COSBucket, cfg.COSRegion, adminClient, cfg.FTPDefaultRootPrefix, auditLog)
+	if cfg.FTPPublicIP != "" {
+		adminAPI.FTPAddress = cfg.FTPPublicIP + cfg.FTPListen
+	}
+	if u, err := url.Parse(cfg.PublicURL); err == nil && u.Hostname() != "" {
+		adminAPI.FTPPublicAddress = u.Hostname() + cfg.FTPListen
+	}
 	if cfg.OIDCIssuerURL != "" {
 		oidcCtx, cancelOIDC := context.WithTimeout(ctx, 10*time.Second)
 		err := adminAPI.ConfigureOIDC(oidcCtx, admin.OIDCConfig{
