@@ -52,7 +52,7 @@ type Server struct {
 	// conn per client conn. Without it ClientContext sees Envoy's pod IP.
 	ProxyProtocol    bool
 	TLS              *TLSConfig
-	NewDriver        func(u *db.FTPUser) (ftpserver.ClientDriver, error) // builds the per-user root/bucket driver
+	NewDriver        func(u *db.FTPUser, clientIP string) (ftpserver.ClientDriver, error) // builds the per-user root/bucket driver
 	Authenticator    Authenticator
 	Audit            *audit.Logger
 	Logger           *slog.Logger
@@ -139,7 +139,8 @@ func (s *Server) AuthUser(cc ftpserver.ClientContext, user, pass string) (ftpser
 		return nil, fmt.Errorf("ftpserver: no driver factory configured")
 	}
 	cc.SetExtra(u.Username)
-	return s.NewDriver(u)
+	clientIP, _, _ := net.SplitHostPort(cc.RemoteAddr().String())
+	return s.NewDriver(u, clientIP)
 }
 
 func (s *Server) GetTLSConfig() (*tls.Config, error) {

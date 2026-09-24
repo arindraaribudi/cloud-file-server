@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -119,10 +120,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 		PassivePortRange: [2]int{cfg.PassivePortRange.Start, cfg.PassivePortRange.End},
 		IdleTimeout:      cfg.IdleTimeout,
 		ProxyProtocol:    cfg.FTPProxyProtocol,
-		NewDriver: func(u *db.FTPUser) (ftpserverlib.ClientDriver, error) {
-			log.Info("ftp: user connected", "username", u.Username, "bucket", cfg.COSBucket, "region", cfg.COSRegion, "root_prefix", u.RootFolder)
+		NewDriver: func(u *db.FTPUser, clientIP string) (ftpserverlib.ClientDriver, error) {
+			log.Info("ftp: user connected", "username", u.Username, "client_ip", clientIP, "bucket", cfg.COSBucket, "region", cfg.COSRegion, "root_prefix", u.RootFolder)
 			auditLog.Log(audit.Event{
 				Username: u.Username,
+				ClientIP: net.ParseIP(clientIP),
 				Action:   "LOGIN",
 				Success:  true,
 				Detail:   map[string]any{"bucket": cfg.COSBucket, "region": cfg.COSRegion, "root_prefix": u.RootFolder},
