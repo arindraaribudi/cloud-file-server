@@ -72,6 +72,10 @@ func (s *Server) GetSettings() (*ftpserver.Settings, error) {
 		// auth boundary.
 		PasvConnectionsCheck:   ftpserver.IPMatchDisabled,
 		ActiveConnectionsCheck: ftpserver.IPMatchDisabled,
+		// Active mode default binds source port 20 (ftp-data), a privileged
+		// port the container's non-root user can't bind → "bind: permission
+		// denied". Use an ephemeral source port instead (RFC 1579).
+		ActiveTransferPortNon20: true,
 	}
 	if s.PassivePortRange[1] > 0 {
 		opts.PassiveTransferPortRange = &ftpserver.PortRange{

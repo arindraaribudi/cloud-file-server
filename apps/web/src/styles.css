@@ -70,7 +70,7 @@ a { color: var(--stamp-blue); }
 .profile-email { font-size: .85rem; color: #55606b; margin-top: .1rem; word-break: break-all; }
 .profile-role { font-size: .78rem; letter-spacing: .04em; text-transform: uppercase; color: #55606b; margin-top: .4rem; }
 .profile-signout { margin-top: .7rem; display: block; }
-.shell-main { flex: 1; padding: 2.5rem 1.75rem; max-width: 960px; margin: 0 auto; width: 100%; }
+.shell-main { flex: 1; padding: 2.5rem 1.75rem; max-width: 1440px; margin: 0 auto; width: 100%; }
 
 /* page header */
 .page-head { margin-bottom: 1.75rem; }
