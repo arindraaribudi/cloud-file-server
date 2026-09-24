@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -138,8 +139,9 @@ func (s *SessionManager) Authenticate(next http.Handler) http.Handler {
 func (a *API) RequireRole(role string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if CurrentRole(r) != role {
-				http.Error(w, "forbidden", http.StatusForbidden)
+			if got := CurrentRole(r); got != role {
+				log.Printf("RBAC_DENY user=%s role=%s required=%s path=%s", CurrentUser(r), got, role, r.URL.Path)
+				http.Error(w, "forbidden: requires \""+role+"\" role, session role is \""+got+"\"", http.StatusForbidden)
 				return
 			}
 			next.ServeHTTP(w, r)
