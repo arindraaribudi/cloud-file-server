@@ -31,10 +31,7 @@ const (
 	codeInternal = "internal"
 )
 
-var (
-	errBadPath = errors.New(codeBadPath)
-	errNotFile = errors.New(codeNotFile)
-)
+var errBadPath = errors.New(codeBadPath)
 
 // sanitizePath normalizes a user-supplied path. Empty input or "/" returns the
 // empty root path. Returns errBadPath if the path contains any ".." segment,
@@ -199,7 +196,7 @@ func (a *API) downloadFile(w http.ResponseWriter, r *http.Request, u *db.FTPUser
 		writeJSONError(w, http.StatusNotFound, codeNotFound, "file not found")
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	name := info.Name()
 	// Always attachment — no inline mode. Content-Type is extension-derived
