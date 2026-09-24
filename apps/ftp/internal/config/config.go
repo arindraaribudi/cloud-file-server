@@ -21,6 +21,7 @@ type Config struct {
 	FTPTLSKey           string
 	IdleTimeout         time.Duration
 	FTPAllowPlain       bool
+	FTPProxyProtocol    bool
 	FTPDefaultAllowActive bool
 	FTPDefaultRefuseOverwrite bool
 	COSStaticSecretID      string
@@ -60,6 +61,7 @@ func Load() (*Config, error) {
 		FTPTLSKey:                  os.Getenv("FTP_TLS_KEY"),
 		IdleTimeout:                300 * time.Second,
 		FTPAllowPlain:              getenv("FTP_ALLOW_PLAIN", "false") == "true",
+		FTPProxyProtocol:           getenv("FTP_PROXY_PROTOCOL", "false") == "true",
 		FTPDefaultAllowActive:      getenv("FTP_DEFAULT_ALLOW_ACTIVE", "false") == "true",
 		FTPDefaultRefuseOverwrite:  getenv("FTP_DEFAULT_REFUSE_OVERWRITE", "false") == "true",
 		COSStaticSecretID:          os.Getenv("COS_STATIC_SECRET_ID"),

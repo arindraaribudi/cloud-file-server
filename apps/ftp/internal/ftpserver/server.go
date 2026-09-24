@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"sync"
 	"time"
 
 	ftpserver "github.com/fclairamb/ftpserverlib"
+	proxyproto "github.com/pires/go-proxyproto"
 
 	"github.com/example/cos-ftp-server/internal/audit"
 	"github.com/example/cos-ftp-server/internal/db"
@@ -44,6 +46,11 @@ type Server struct {
 	PublicHost       string
 	PassivePortRange [2]int
 	IdleTimeout      time.Duration
+	// ProxyProtocol expects Envoy Gateway (BackendTrafficPolicy.proxyProtocol)
+	// to prepend a PROXY protocol header on every conn it forwards — control
+	// and each passive data conn alike, since TCPRoute opens a fresh backend
+	// conn per client conn. Without it ClientContext sees Envoy's pod IP.
+	ProxyProtocol    bool
 	TLS              *TLSConfig
 	NewDriver        func(u *db.FTPUser) (ftpserver.ClientDriver, error) // builds the per-user root/bucket driver
 	Authenticator    Authenticator
@@ -54,8 +61,9 @@ type Server struct {
 	serveWG sync.WaitGroup // tracks the Serve goroutine so Stop can drain it
 }
 
-// Compile-time check.
+// Compile-time checks.
 var _ ftpserver.MainDriver = (*Server)(nil)
+var _ ftpserver.MainDriverExtensionPassiveWrapper = (*Server)(nil)
 
 func (s *Server) GetSettings() (*ftpserver.Settings, error) {
 	listenAddr := s.Addr
@@ -86,7 +94,24 @@ func (s *Server) GetSettings() (*ftpserver.Settings, error) {
 	if s.IdleTimeout > 0 {
 		opts.IdleTimeout = int(s.IdleTimeout.Seconds())
 	}
+	if s.ProxyProtocol {
+		ln, err := net.Listen("tcp", listenAddr)
+		if err != nil {
+			return nil, fmt.Errorf("ftpserver: proxy-protocol listen: %w", err)
+		}
+		opts.Listener = &proxyproto.Listener{Listener: ln}
+	}
 	return opts, nil
+}
+
+// WrapPassiveListener implements ftpserver.MainDriverExtensionPassiveWrapper.
+// Envoy opens a fresh backend conn per passive data transfer too, so each
+// one needs the same PROXY protocol unwrap as the control listener.
+func (s *Server) WrapPassiveListener(l net.Listener) (net.Listener, error) {
+	if !s.ProxyProtocol {
+		return l, nil
+	}
+	return &proxyproto.Listener{Listener: l}, nil
 }
 
 func (s *Server) ClientConnected(ftpserver.ClientContext) (string, error) {

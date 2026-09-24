@@ -118,6 +118,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		PublicHost:       cfg.FTPPublicIP,
 		PassivePortRange: [2]int{cfg.PassivePortRange.Start, cfg.PassivePortRange.End},
 		IdleTimeout:      cfg.IdleTimeout,
+		ProxyProtocol:    cfg.FTPProxyProtocol,
 		NewDriver: func(u *db.FTPUser) (ftpserverlib.ClientDriver, error) {
 			log.Info("ftp: user connected", "username", u.Username, "bucket", cfg.COSBucket, "region", cfg.COSRegion, "root_prefix", u.RootFolder)
 			auditLog.Log(audit.Event{
