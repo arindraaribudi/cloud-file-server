@@ -33,82 +33,129 @@ permissions:
   contents: write
 
 jobs:
-  preflight:
-    name: lint + test + build
-    runs-on: ubuntu-latest
+  govulncheck:
+    name: govulncheck (ftp)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version: "1.26.6"
+          cache: true
+          cache-dependency-path: apps/ftp/go.sum
+      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - working-directory: apps/ftp
+        run: "$(go env GOPATH)/bin/govulncheck ./..."
+
+  lint:
+    name: golangci-lint (ftp)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version: "1.26.6"
+          cache: true
+          cache-dependency-path: apps/ftp/go.sum
+      - run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+      - working-directory: apps/ftp
+        run: "$(go env GOPATH)/bin/golangci-lint run --timeout=5m ./..."
+
+  test:
+    name: go test (ftp)
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
     steps:
-      - name: checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
-          fetch-depth: 0
-
-      - name: setup-go
-        uses: actions/setup-go@v5
+          fetch-depth: 1
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version: "1.26.6"
           cache: true
-
-      - name: setup-bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4.0"
-
-      - name: bun install
-        run: bun install --frozen-lockfile
-
-      - name: security audit
-        working-directory: apps/ftp
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          "$(go env GOPATH)/bin/govulncheck" ./...
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v8
-        with:
-          version: v2.13.2
-          working-directory: apps/ftp
-          args: --timeout=5m
-
-      - name: go test
-        working-directory: apps/ftp
+          cache-dependency-path: apps/ftp/go.sum
+      - working-directory: apps/ftp
         run: go test -race ./...
 
-      - name: go build
-        working-directory: apps/ftp
-        run: CGO_ENABLED=0 go build -o /tmp/ftp-server-build ./cmd/ftp-server
+  build:
+    name: go build (ftp)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version: "1.26.6"
+          cache: true
+          cache-dependency-path: apps/ftp/go.sum
+      - working-directory: apps/ftp
+        run: go build -o /tmp/ftp-server-build ./cmd/ftp-server
 
-      - name: web typecheck
-        working-directory: apps/web
+  web-typecheck:
+    name: typecheck (web)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 1
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"
+      - working-directory: apps/web
+        run: bun install --frozen-lockfile
+      - working-directory: apps/web
         run: bun run typecheck
 
-      - name: web build
-        working-directory: apps/web
+  web-build:
+    name: build (web)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 1
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"
+      - working-directory: apps/web
+        run: bun install --frozen-lockfile
+      - working-directory: apps/web
         run: bun run build
 
   release:
     name: release
-    runs-on: ubuntu-latest
-    needs: preflight
+    runs-on: ubuntu-24.04
+    needs: [govulncheck, lint, test, build, web-typecheck, web-build]
     timeout-minutes: 30
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: setup-go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.26.6"
-
-      - name: setup-bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4.0"
 
       - name: resolve version
         id: version
@@ -116,10 +163,11 @@ jobs:
           BUMP: ${{ inputs.bump }}
           CUSTOM: ${{ inputs.custom_version }}
           PREFIX: ${{ inputs.tag_prefix }}
+          PRERELEASE: ${{ inputs.prerelease }}
         run: |
           set -euo pipefail
-          # Semver: MAJOR.MINOR.PATCH (no leading 'v'); tag = "<prefix><ver>"
-          semver_re='^([0-9]+)\.([0-9]+)\.([0-9]+)$'
+          # Semver with optional prerelease suffix, e.g. 0.2.0 or 0.2.0-rc1
+          semver_re='^([0-9]+)\.([0-9]+)\.([0-9]+)(-[a-zA-Z0-9.]+)?$'
 
           git fetch --tags --force
 
@@ -148,7 +196,7 @@ jobs:
             if [[ "${CUSTOM}" =~ ${semver_re} ]]; then
               next="${CUSTOM}"
             else
-              echo "::error::custom_version '${CUSTOM}' is not semver MAJOR.MINOR.PATCH." >&2
+              echo "::error::custom_version '${CUSTOM}' is not semver MAJOR.MINOR.PATCH[-suffix]." >&2
               exit 1
             fi
           else
@@ -160,6 +208,16 @@ jobs:
             esac
           fi
 
+          # Append -rcN suffix when prerelease=true; auto-increments if base+rcN tag exists.
+          # Skip when bump=custom — user controls the suffix in custom_version.
+          if [ "${PRERELEASE}" = "true" ] && [ "${BUMP}" != "custom" ]; then
+            rc_n=1
+            while git rev-parse -q --verify "refs/tags/${PREFIX}${next}-rc${rc_n}" >/dev/null; do
+              rc_n=$((rc_n + 1))
+            done
+            next="${next}-rc${rc_n}"
+          fi
+
           tag="${PREFIX}${next}"
           if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
             echo "::error::Tag '${tag}' already exists." >&2
@@ -168,60 +226,14 @@ jobs:
 
           echo "version=${next}" >>"${GITHUB_OUTPUT}"
           echo "tag=${tag}" >>"${GITHUB_OUTPUT}"
-          echo "Resolved ${tag} (current was ${current}, bump=${BUMP})."
-
-      - name: mint app token
-        id: app
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ vars.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          permission-contents: write
-
-      - name: create + push tag
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-          APP_TOKEN: ${{ steps.app.outputs.token }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${TAG}" -m "Release ${TAG}"
-          # App token bypasses the GITHUB_TOKEN no-trigger rule, so ci.yml fires.
-          git push "https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${TAG}"
-
-      - name: build + package ftp
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          set -euo pipefail
-          mkdir -p /tmp/release
-          cd apps/ftp
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /tmp/ftp-server ./cmd/ftp-server
-          tar czf "/tmp/release/ftp-${TAG}-linux-amd64.tar.gz" -C /tmp ftp-server
-
-      - name: build + package web
-        working-directory: apps/web
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          set -euo pipefail
-          bun install --frozen-lockfile
-          bun run build
-          tar czf "/tmp/release/web-${TAG}.tar.gz" -C dist .
-
-      - name: stage assets
-        run: ls -la /tmp/release
+          echo "Resolved ${tag} (current was ${current}, bump=${BUMP}, prerelease=${PRERELEASE})."
 
       - name: create github release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3.0.3
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           generate_release_notes: true
           prerelease: ${{ inputs.prerelease }}
-          files: |
-            /tmp/release/ftp-*.tar.gz
-            /tmp/release/web-*.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -233,6 +245,16 @@ jobs:
             echo ""
             echo "- bump: \`${{ inputs.bump }}\`"
             echo "- prerelease: \`${{ inputs.prerelease }}\`"
-            echo "- preflight: \`${{ needs.preflight.result }}\`"
             echo "- release: \`${{ job.status }}\`"
           } >>"$GITHUB_STEP_SUMMARY"
+
+  build-ci:
+    name: build + push images
+    needs: release
+    if: needs.release.result == 'success'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/ci.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
