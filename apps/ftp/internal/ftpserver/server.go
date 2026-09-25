@@ -59,6 +59,17 @@ type Server struct {
 
 	srv     *ftpserver.FtpServer
 	serveWG sync.WaitGroup // tracks the Serve goroutine so Stop can drain it
+
+	// tlsConfig is built once and reused for the control connection and
+	// every passive/active data connection. ftpserverlib calls
+	// GetTLSConfig() again per data channel; returning a fresh *tls.Config
+	// each time gives Go's crypto/tls a new random session-ticket key per
+	// call, so tickets issued on one connection can never be redeemed on
+	// another and TLS session resumption never works (FileZilla's "insecure
+	// data connection" warning). Reusing one *tls.Config fixes that.
+	tlsConfigOnce sync.Once
+	tlsConfig     *tls.Config
+	tlsConfigErr  error
 }
 
 // Compile-time checks.
@@ -152,11 +163,18 @@ func (s *Server) GetTLSConfig() (*tls.Config, error) {
 	if s.TLS == nil {
 		return nil, errors.New("ftpserver: TLS not configured")
 	}
-	cert, err := loadCertChain(s.TLS.CertFile, s.TLS.KeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("ftpserver: tls: %w", err)
-	}
-	return &tls.Config{Certificates: []tls.Certificate{cert}}, nil
+	// Build once and reuse across every call (control + each data
+	// connection) so Go's session-ticket key stays stable and resumption
+	// works. See tlsConfig field comment.
+	s.tlsConfigOnce.Do(func() {
+		cert, err := loadCertChain(s.TLS.CertFile, s.TLS.KeyFile)
+		if err != nil {
+			s.tlsConfigErr = fmt.Errorf("ftpserver: tls: %w", err)
+			return
+		}
+		s.tlsConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
+	})
+	return s.tlsConfig, s.tlsConfigErr
 }
 
 // loadCertChain reads certFile (PEM: first CERTIFICATE block is leaf, rest are
