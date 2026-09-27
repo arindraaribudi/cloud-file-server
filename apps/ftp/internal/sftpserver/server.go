@@ -26,9 +26,12 @@ var errAuthFailed = errors.New("sftpserver: login failed")
 
 // clientIPFromAddr extracts the host portion of a "host:port" RemoteAddr
 // and parses it as an IP. Falls back to the IPv4 loopback when parsing
-// fails (e.g. unix socket or empty addr in tests) so the audit row always
-// has an IP rather than NULL.
+// fails or addr is empty (e.g. nil RemoteAddr in tests) so the audit row
+// always has an IP rather than NULL.
 func clientIPFromAddr(addr string) net.IP {
+	if addr == "" {
+		return net.IPv4(127, 0, 0, 1)
+	}
 	if host, _, err := net.SplitHostPort(addr); err == nil && host != "" {
 		if ip := net.ParseIP(host); ip != nil {
 			return ip
