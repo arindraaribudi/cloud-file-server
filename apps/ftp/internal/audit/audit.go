@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,11 +21,30 @@ type Event struct {
 	ClientIP  net.IP         `json:"client_ip"`
 	SessionID uuid.UUID      `json:"session_id"`
 	Action    string         `json:"action"`
+	EventType string         `json:"event_type"` // high-level category: auth/file_access/admin/system/other
 	Path      string         `json:"path"`
 	Bytes     int64          `json:"bytes"`
 	Success   bool           `json:"success"`
 	Source    string         `json:"source"` // for CRED_REFRESH only
 	Detail    map[string]any `json:"detail"`
+}
+
+// classifyEventType maps an action string to a high-level category. Callers
+// can override by setting EventType on the Event before Log(); an empty
+// EventType gets classified here so callers don't have to remember.
+func classifyEventType(action string) string {
+	switch action {
+	case "LOGIN", "LOGOUT":
+		return "auth"
+	case "UPLOAD", "DOWNLOAD", "LIST", "DELETE", "RENAME", "MKDIR", "FILE_DOWNLOAD":
+		return "file_access"
+	case "CRED_REFRESH":
+		return "system"
+	}
+	if strings.HasPrefix(action, "ADMIN") {
+		return "admin"
+	}
+	return "other"
 }
 
 type Logger struct {
@@ -55,6 +75,9 @@ func (l *Logger) Log(e Event) {
 	}
 	if e.SessionID == uuid.Nil {
 		e.SessionID = uuid.New()
+	}
+	if e.EventType == "" {
+		e.EventType = classifyEventType(e.Action)
 	}
 	select {
 	case l.ch <- e:
@@ -118,9 +141,9 @@ func (l *Logger) writeBatch(ctx context.Context, batch []Event) error {
 		}
 		_, err = tx.Exec(ctx, `
 			INSERT INTO audit_events
-			(event_time, username, client_ip, session_id, action, path, bytes, success, source, detail)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-			e.EventTime, e.Username, ip, e.SessionID, e.Action, e.Path, e.Bytes, e.Success, src, detail)
+			(event_time, username, client_ip, session_id, action, event_type, path, bytes, success, source, detail)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+			e.EventTime, e.Username, ip, e.SessionID, e.Action, e.EventType, e.Path, e.Bytes, e.Success, src, detail)
 		if err != nil {
 			return fmt.Errorf("insert audit: %w", err)
 		}

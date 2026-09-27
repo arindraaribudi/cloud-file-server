@@ -12,32 +12,38 @@ import (
 type PortRange struct{ Start, End int }
 
 type Config struct {
-	DatabaseURL         string
-	FTPListen           string
-	FTPPublicIP         string
-	FTPLocalRoot        string
-	PassivePortRange    PortRange
-	FTPTLSCert          string
-	FTPTLSKey           string
-	IdleTimeout         time.Duration
-	FTPAllowPlain       bool
-	FTPProxyProtocol    bool
-	FTPDefaultAllowActive bool
+	DatabaseURL               string
+	FTPListen                 string
+	FTPPublicIP               string
+	FTPLocalRoot              string
+	PassivePortRange          PortRange
+	FTPTLSCert                string
+	FTPTLSKey                 string
+	IdleTimeout               time.Duration
+	FTPAllowPlain             bool
+	FTPProxyProtocol          bool
+	FTPEnabled                bool
+	SFTPEnabled               bool
+	SFTPListen                string
+	SFTPHostKey               string
+	FTPDefaultAllowActive     bool
 	FTPDefaultRefuseOverwrite bool
-	COSStaticSecretID      string
-	COSStaticSecretKey     string
-	COSStaticSessionToken  string
-	COSBucket              string
-	COSRegion              string
-	STSRefreshRatio     float64
-	AuditRetentionDays  int
-	AuthLockoutLimit    int
-	AuthLockoutWindow   time.Duration
-	AdminListen         string
-	AdminCookieSecure   bool
-	SeedEnabled         bool
-	LogLevel            string
-	LogFormat           string
+	COSStaticSecretID         string
+	COSStaticSecretKey        string
+	COSStaticSessionToken     string
+	COSBucket                 string
+	COSRegion                 string
+	StorageBackend            string
+	StorageLocalRoot          string
+	STSRefreshRatio           float64
+	AuditRetentionDays        int
+	AuthLockoutLimit          int
+	AuthLockoutWindow         time.Duration
+	AdminListen               string
+	AdminCookieSecure         bool
+	SeedEnabled               bool
+	LogLevel                  string
+	LogFormat                 string
 
 	FTPDefaultRootPrefix string
 
@@ -53,31 +59,37 @@ type Config struct {
 
 func Load() (*Config, error) {
 	c := &Config{
-		DatabaseURL:                os.Getenv("DATABASE_URL"),
-		FTPListen:                  getenv("FTP_LISTEN", ":2121"),
-		FTPPublicIP:                os.Getenv("FTP_PUBLIC_IP"),
-		FTPLocalRoot:               getenv("FTP_LOCAL_ROOT", "/tmp/ftp-m1"),
-		FTPTLSCert:                 os.Getenv("FTP_TLS_CERT"),
-		FTPTLSKey:                  os.Getenv("FTP_TLS_KEY"),
-		IdleTimeout:                300 * time.Second,
-		FTPAllowPlain:              getenv("FTP_ALLOW_PLAIN", "false") == "true",
-		FTPProxyProtocol:           getenv("FTP_PROXY_PROTOCOL", "false") == "true",
-		FTPDefaultAllowActive:      getenv("FTP_DEFAULT_ALLOW_ACTIVE", "false") == "true",
-		FTPDefaultRefuseOverwrite:  getenv("FTP_DEFAULT_REFUSE_OVERWRITE", "false") == "true",
-		COSStaticSecretID:          os.Getenv("COS_STATIC_SECRET_ID"),
-		COSStaticSecretKey:         os.Getenv("COS_STATIC_SECRET_KEY"),
-		COSStaticSessionToken:      os.Getenv("COS_STATIC_SESSION_TOKEN"),
-		COSBucket:                  getenv("COS_BUCKET", "test-1409486316"),
-		COSRegion:                  getenv("COS_REGION", "ap-bangkok"),
-		STSRefreshRatio:            0.8,
-		AuditRetentionDays:         365,
-		AuthLockoutLimit:           5,
-		AuthLockoutWindow:          15 * time.Minute,
-		AdminListen:                getenv("ADMIN_LISTEN", ":8080"),
-		AdminCookieSecure:          adminCookieSecure(getenv("ADMIN_COOKIE_SECURE", ""), getenv("PUBLIC_URL", "http://localhost:9001")),
-		SeedEnabled:                getenv("FTP_SEED", "false") == "true",
-		LogLevel:                   getenv("LOG_LEVEL", "info"),
-		LogFormat:                  getenv("LOG_FORMAT", "json"),
+		DatabaseURL:               os.Getenv("DATABASE_URL"),
+		FTPListen:                 getenv("FTP_LISTEN", ":2121"),
+		FTPPublicIP:               os.Getenv("FTP_PUBLIC_IP"),
+		FTPLocalRoot:              getenv("FTP_LOCAL_ROOT", "/tmp/ftp-m1"),
+		FTPTLSCert:                os.Getenv("FTP_TLS_CERT"),
+		FTPTLSKey:                 os.Getenv("FTP_TLS_KEY"),
+		IdleTimeout:               300 * time.Second,
+		FTPAllowPlain:             getenv("FTP_ALLOW_PLAIN", "false") == "true",
+		FTPProxyProtocol:          getenv("FTP_PROXY_PROTOCOL", "false") == "true",
+		SFTPEnabled:               getenv("SFTP_ENABLED", "false") == "true",
+		FTPEnabled:                getenv("FTP_ENABLED", "false") == "true",
+		SFTPListen:                getenv("SFTP_LISTEN", ":2222"),
+		SFTPHostKey:               os.Getenv("SFTP_HOST_KEY"),
+		FTPDefaultAllowActive:     getenv("FTP_DEFAULT_ALLOW_ACTIVE", "false") == "true",
+		FTPDefaultRefuseOverwrite: getenv("FTP_DEFAULT_REFUSE_OVERWRITE", "false") == "true",
+		COSStaticSecretID:         os.Getenv("COS_STATIC_SECRET_ID"),
+		COSStaticSecretKey:        os.Getenv("COS_STATIC_SECRET_KEY"),
+		COSStaticSessionToken:     os.Getenv("COS_STATIC_SESSION_TOKEN"),
+		COSBucket:                 getenv("COS_BUCKET", "test-1409486316"),
+		COSRegion:                 getenv("COS_REGION", "ap-bangkok"),
+		StorageBackend:            getenv("STORAGE_BACKEND", "cos.objectstorage.plugin"), // must match fsdriver.PluginCOS
+		StorageLocalRoot:          getenv("STORAGE_LOCAL_ROOT", "./data"),
+		STSRefreshRatio:           0.8,
+		AuditRetentionDays:        365,
+		AuthLockoutLimit:          5,
+		AuthLockoutWindow:         15 * time.Minute,
+		AdminListen:               getenv("ADMIN_LISTEN", ":8080"),
+		AdminCookieSecure:         adminCookieSecure(getenv("ADMIN_COOKIE_SECURE", ""), getenv("PUBLIC_URL", "http://localhost:9001")),
+		SeedEnabled:               getenv("FTP_SEED", "false") == "true",
+		LogLevel:                  getenv("LOG_LEVEL", "info"),
+		LogFormat:                 getenv("LOG_FORMAT", "json"),
 
 		PublicURL: getenv("PUBLIC_URL", "http://localhost:9001"),
 

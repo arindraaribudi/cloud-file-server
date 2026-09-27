@@ -19,8 +19,12 @@ export type Session = {
   email: string;
   first_name: string;
   last_name: string;
+  ftp_enabled: boolean;
   ftp_address: string;
   ftp_public_address: string;
+  sftp_enabled: boolean;
+  sftp_address: string;
+  sftp_public_address: string;
   cos_address: string;
 };
 
@@ -29,6 +33,8 @@ export type FTPUser = {
   username: string;
   root_folder: string;
   enabled: boolean;
+  ftp_enabled: boolean;
+  sftp_enabled: boolean;
   created_at: string;
   last_login: string | null;
 };
@@ -38,17 +44,28 @@ export type AuditEvent = {
   username: string;
   client_ip: string;
   action: string;
+  event_type: string;
   path: string;
   success: boolean;
 };
 
 export const OIDC_AUTHORIZE_URL = "/api/v1/auth/oidc/authorize";
 
-export function createUser(payload: { username: string; root_folder: string; password: string; enabled: boolean }) {
+export function createUser(payload: {
+  username: string;
+  root_folder: string;
+  password: string;
+  enabled: boolean;
+  ftp_enabled: boolean;
+  sftp_enabled: boolean;
+}) {
   return api<FTPUser>("/api/v1/users", { method: "POST", body: JSON.stringify(payload) });
 }
 
-export function updateUser(username: string, payload: { root_folder: string; enabled: boolean }) {
+export function updateUser(
+  username: string,
+  payload: { root_folder: string; enabled: boolean; ftp_enabled: boolean; sftp_enabled: boolean },
+) {
   return api<FTPUser>(`/api/v1/users/${encodeURIComponent(username)}`, { method: "PATCH", body: JSON.stringify(payload) });
 }
 
@@ -56,6 +73,13 @@ export function resetUserPassword(username: string, password: string) {
   return api<void>(`/api/v1/users/${encodeURIComponent(username)}/password`, {
     method: "POST",
     body: JSON.stringify({ password }),
+  });
+}
+
+export function setUserSFTPKey(username: string, publicKey: string) {
+  return api<void>(`/api/v1/users/${encodeURIComponent(username)}/sftp-key`, {
+    method: "POST",
+    body: JSON.stringify({ public_key: publicKey }),
   });
 }
 

@@ -1,13 +1,49 @@
 # cloud-file-server
 
-Monorepo: COS-backed FTP/FTPS server (Go) + admin SPA (Bun + React + TanStack Router).
+Monorepo: COS-backed FTP/FTPS + SFTP server (Go) + admin SPA (Bun + React + TanStack Router).
 
-End users upload and download files from any standards-compliant FTP client against a Tencent COS bucket. Administrators manage FTP users and review the audit trail through the browser UI.
+End users upload and download files against a Tencent COS bucket using FTP/FTPS or SFTP. Administrators manage users, reset passwords, toggle per-protocol access, browse uploaded files, and review the audit trail through the browser UI.
 
 | App | Stack | Port |
 |---|---|---|
-| `apps/ftp` | Go 1.26, ftpserverlib, pgx, afero, COS SDK | FTP `:2121` + admin `:8080` |
+| `apps/ftp` | Go 1.26, ftpserverlib, go-sftp, pgx, afero, COS SDK | FTP `:2121` + SFTP `:2222` + admin `:8080` |
 | `apps/web` | Bun 1.4 + React 19 + TanStack Router/Query/Table + Vite | `:9001` (static + reverse proxy `/api/*` → `:8080`) |
+
+## Features
+
+### FTP / FTPS
+- Standards-compliant FTP/FTPS server (`ftpserverlib`) on `:2121` with optional TLS (`FTP_TLS_CERT`, `FTP_TLS_KEY`).
+- Non-TLS control channel disabled by default; flip with `FTP_ALLOW_PLAIN=true`.
+- Per-user bcrypt-hashed password, lockout on repeated failures (`auth` package).
+- Files persisted to a COS bucket via the `cos` afero driver — virtual folders synthesized from object key prefixes.
+
+### SFTP
+- Companion SSH file-transfer server (`go-sftp`) on `:2222`, gated by `SFTP_ENABLED=true`.
+- Two auth modes: password (same bcrypt creds as FTP) and SSH public key (stored per user).
+- Host key from `SFTP_HOST_KEY` (base64-ed25519) or auto-generated on first boot.
+- Public keys managed via `POST /api/v1/users/{username}/sftp-key` or the `/users/:username/sftp-key` UI page.
+
+### Admin file manager
+- Browse any user's COS subtree at `/files/:userId?path=...` (`GET /api/v1/files/{userId}`).
+- Breadcrumb nav across virtual folders; download via signed link (`GET /api/v1/files/{userId}/download?path=...`).
+- Powered by the same COS driver the FTP/SFTP servers use — what admins see is what users see.
+
+### Password reset
+- Admin triggers reset at `POST /api/v1/users/{username}/password` (UI: `/users/:username/password`).
+- Generates a one-shot temporary password, prints it once, forces change-on-next-login.
+- The user can also self-serve from the profile page (OIDC-linked session).
+
+### Disable / enable
+- Each user carries `enabled`, `ftp_enabled`, `sftp_enabled` flags.
+- Flip via `PATCH /api/v1/users/{username}` (UI toggles on `/users/:username/edit`).
+- Disabled user = login rejected on both FTP and SFTP. Protocol-level disable = that one channel rejects the creds; the other keeps working.
+
+### Audit trail
+- Async batched logger (`audit` package) writes to `audit_events` (range-partitioned by month) and `audit_sessions`.
+- Every FTP/SFTP login, command, file op, admin action (create/update/delete/reset/key change), and OIDC login is captured with actor IP, target, outcome.
+- Browse at `/audit` (`GET /api/v1/audit`) with filters: actor, action type, date range.
+- Export to CSV via `GET /api/v1/audit/export`.
+- Retention policy in `audit/retention.go` (env-tunable); `apps/ftp/docs/runbook.md` covers archival/cleanup.
 
 The Bun server is a thin shim: it serves the SPA bundle and forwards `/api/*` to the Go admin API. All business logic lives in Go.
 
@@ -141,6 +177,9 @@ Every knob is an environment variable. See `SPEC.md` §10 for the full reference
 | `FTP_PASSIVE_PORT_RANGE` | `50000-50999` | Passive data ports |
 | `FTP_TLS_CERT`, `FTP_TLS_KEY` | empty | FTPS |
 | `FTP_ALLOW_PLAIN` | `false` | Permit non-TLS control |
+| `SFTP_ENABLED` | `false` | Enable SFTP server |
+| `SFTP_LISTEN` | `:2222` | SFTP control bind |
+| `SFTP_HOST_KEY` | empty | Base64 ed25519 host key (auto-generated if empty) |
 | `COS_BUCKET`, `COS_REGION` | `test-1409486316`, `ap-bangkok` | Default COS target |
 | `COS_STATIC_SECRET_ID`, `COS_STATIC_SECRET_KEY` | empty | Fallback AK/SK (required today) |
 | `ADMIN_LISTEN` | `:8080` | Admin HTTP bind |

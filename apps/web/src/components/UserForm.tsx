@@ -9,6 +9,8 @@ export type UserFormValues = {
   root_folder: string;
   password: string;
   enabled: boolean;
+  ftp_enabled: boolean;
+  sftp_enabled: boolean;
 };
 
 function FolderCombobox({
@@ -160,6 +162,8 @@ export function UserForm({
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [enabled, setEnabled] = useState(initial?.enabled ?? true);
+  const [ftpEnabled, setFtpEnabled] = useState(initial?.ftp_enabled ?? true);
+  const [sftpEnabled, setSftpEnabled] = useState(initial?.sftp_enabled ?? false);
 
   const trimmedRoot = rootFolder.replace(/\/+$/, "");
   const trimmedSub = subFolder.replace(/\/+$/, "");
@@ -194,7 +198,7 @@ export function UserForm({
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    onSubmit({ username, root_folder: "/" + combinedPath, password, enabled });
+    onSubmit({ username, root_folder: "/" + combinedPath, password, enabled, ftp_enabled: ftpEnabled, sftp_enabled: sftpEnabled });
   }
 
   return (
@@ -274,6 +278,24 @@ export function UserForm({
           <span className="thumb" />
         </span>
         <label>{enabled ? "Enabled" : "Disabled"}</label>
+      </div>
+
+      <div className="switch-row">
+        <span className="switch">
+          <input type="checkbox" checked={ftpEnabled} onChange={(e) => setFtpEnabled(e.target.checked)} />
+          <span className="track" />
+          <span className="thumb" />
+        </span>
+        <label>FTP access {ftpEnabled ? "enabled" : "disabled"}</label>
+      </div>
+
+      <div className="switch-row">
+        <span className="switch">
+          <input type="checkbox" checked={sftpEnabled} onChange={(e) => setSftpEnabled(e.target.checked)} />
+          <span className="track" />
+          <span className="thumb" />
+        </span>
+        <label>SFTP access {sftpEnabled ? "enabled" : "disabled"}</label>
       </div>
 
       {error && <p className="err">{error}</p>}

@@ -43,12 +43,12 @@ export function AuthedLayout() {
       <header className="shell-header">
         <div className="brand">
           <span className="brand-name">Cloud File Server</span>
-          {(session.ftp_address || session.ftp_public_address || session.cos_address) && (
+          {(session.ftp_address || session.ftp_public_address || session.sftp_address || session.sftp_public_address || session.cos_address) && (
             <div className="brand-meta">
               {[
-                session.ftp_address && `ftp://${session.ftp_address}`,
-                session.ftp_public_address && `ftp://${session.ftp_public_address}`,
-                session.cos_address,
+                `${session.ftp_enabled ? "FTP: ON" : "FTP: OFF"}${session.ftp_public_address ? ` — ftp://${session.ftp_public_address}` : session.ftp_address ? ` — ftp://${session.ftp_address}` : ""}`,
+                `${session.sftp_enabled ? "SFTP: ON" : "SFTP: OFF"}${session.sftp_public_address ? ` — sftp://${session.sftp_public_address}` : session.sftp_address ? ` — sftp://${session.sftp_address}` : ""}`,
+                session.cos_address && `COS: ${session.cos_address}`,
               ]
                 .filter(Boolean)
                 .join(" | ")}

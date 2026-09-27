@@ -11,7 +11,7 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
-const ftpUserColumns = "id, username, password_hash, root_folder, cos_bucket, COALESCE(cos_region, ''), enabled, allow_active_mode, refuse_overwrite, max_sessions, created_at, updated_at, deleted_at, last_login"
+const ftpUserColumns = "id, username, password_hash, root_folder, cos_bucket, COALESCE(cos_region, ''), enabled, allow_active_mode, refuse_overwrite, max_sessions, ftp_enabled, sftp_enabled, created_at, updated_at, deleted_at, last_login"
 
 type FTPUser struct {
 	ID              int64      `json:"id"`
@@ -24,10 +24,16 @@ type FTPUser struct {
 	AllowActiveMode bool       `json:"allow_active_mode"`
 	RefuseOverwrite bool       `json:"refuse_overwrite"`
 	MaxSessions     int        `json:"max_sessions"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
-	DeletedAt       *time.Time `json:"deleted_at,omitempty"`
-	LastLogin       *time.Time `json:"last_login"`
+	FTPEnabled      bool       `json:"ftp_enabled"`
+	SFTPEnabled     bool       `json:"sftp_enabled"`
+	// SFTPPublicKey is never included in ftpUserColumns/the general JSON
+	// response — fetched only via GetFTPUserPublicKey, which the SFTP
+	// touchpoint uses for its pubkey-auth lookup.
+	SFTPPublicKey string     `json:"-"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	DeletedAt     *time.Time `json:"deleted_at,omitempty"`
+	LastLogin     *time.Time `json:"last_login"`
 }
 
 type AdminUser struct {
@@ -41,10 +47,10 @@ type AdminUser struct {
 func CreateFTPUser(ctx context.Context, pool *pgxpool.Pool, u *FTPUser) (int64, error) {
 	var id int64
 	err := pool.QueryRow(ctx, `
-		INSERT INTO ftp_users (username, password_hash, root_folder, cos_bucket, cos_region, enabled, allow_active_mode, refuse_overwrite, max_sessions)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+		INSERT INTO ftp_users (username, password_hash, root_folder, cos_bucket, cos_region, enabled, allow_active_mode, refuse_overwrite, max_sessions, ftp_enabled, sftp_enabled)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
 		u.Username, u.PasswordHash, u.RootFolder, u.COSBucket, nilIfEmpty(u.COSRegion),
-		u.Enabled, u.AllowActiveMode, u.RefuseOverwrite, u.MaxSessions).Scan(&id)
+		u.Enabled, u.AllowActiveMode, u.RefuseOverwrite, u.MaxSessions, u.FTPEnabled, u.SFTPEnabled).Scan(&id)
 	return id, err
 }
 
@@ -55,6 +61,7 @@ func GetFTPUserByUsername(ctx context.Context, pool *pgxpool.Pool, name string) 
 		FROM ftp_users WHERE username=$1 AND deleted_at IS NULL`, name).
 		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.RootFolder, &u.COSBucket, &u.COSRegion,
 			&u.Enabled, &u.AllowActiveMode, &u.RefuseOverwrite, &u.MaxSessions,
+			&u.FTPEnabled, &u.SFTPEnabled,
 			&u.CreatedAt, &u.UpdatedAt, &u.DeletedAt, &u.LastLogin)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -70,7 +77,8 @@ func GetFTPUserByID(ctx context.Context, pool *pgxpool.Pool, id int64) (*FTPUser
 		`SELECT `+ftpUserColumns+` FROM ftp_users WHERE id=$1 AND deleted_at IS NULL`, id).
 		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.RootFolder, &u.COSBucket,
 			&u.COSRegion, &u.Enabled, &u.AllowActiveMode, &u.RefuseOverwrite,
-			&u.MaxSessions, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt, &u.LastLogin)
+			&u.MaxSessions, &u.FTPEnabled, &u.SFTPEnabled,
+			&u.CreatedAt, &u.UpdatedAt, &u.DeletedAt, &u.LastLogin)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -80,13 +88,37 @@ func GetFTPUserByID(ctx context.Context, pool *pgxpool.Pool, id int64) (*FTPUser
 	return u, nil
 }
 
+// GetFTPUserPublicKey fetches the minimal set of fields the SFTP touchpoint's
+// public-key auth path needs: identity, access flags, mount root, and the
+// stored key. Does not require a password. Returns ErrNotFound if the user
+// doesn't exist or is soft-deleted.
+func GetFTPUserPublicKey(ctx context.Context, pool *pgxpool.Pool, username string) (*FTPUser, error) {
+	u := &FTPUser{}
+	err := pool.QueryRow(ctx, `
+		SELECT id, username, root_folder, enabled, sftp_enabled, COALESCE(sftp_public_key, '')
+		FROM ftp_users WHERE username=$1 AND deleted_at IS NULL`, username).
+		Scan(&u.ID, &u.Username, &u.RootFolder, &u.Enabled, &u.SFTPEnabled, &u.SFTPPublicKey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return u, err
+}
+
+// SetFTPUserSFTPKey stores u's SFTP public key. An empty key clears it
+// (falls back to password-only auth for that user).
+func SetFTPUserSFTPKey(ctx context.Context, pool *pgxpool.Pool, id int64, key string) error {
+	_, err := pool.Exec(ctx, `UPDATE ftp_users SET sftp_public_key=$2, updated_at=now() WHERE id=$1`, id, nilIfEmpty(key))
+	return err
+}
+
 func UpdateFTPUser(ctx context.Context, pool *pgxpool.Pool, u *FTPUser) error {
 	_, err := pool.Exec(ctx, `
 		UPDATE ftp_users SET root_folder=$2, cos_bucket=$3, cos_region=$4, enabled=$5,
-			allow_active_mode=$6, refuse_overwrite=$7, max_sessions=$8, updated_at=now()
+			allow_active_mode=$6, refuse_overwrite=$7, max_sessions=$8,
+			ftp_enabled=$9, sftp_enabled=$10, updated_at=now()
 		WHERE id=$1 AND deleted_at IS NULL`,
 		u.ID, u.RootFolder, u.COSBucket, nilIfEmpty(u.COSRegion), u.Enabled,
-		u.AllowActiveMode, u.RefuseOverwrite, u.MaxSessions)
+		u.AllowActiveMode, u.RefuseOverwrite, u.MaxSessions, u.FTPEnabled, u.SFTPEnabled)
 	return err
 }
 
@@ -119,6 +151,7 @@ func ListFTPUsers(ctx context.Context, pool *pgxpool.Pool, search string, limit,
 		u := &FTPUser{}
 		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.RootFolder, &u.COSBucket, &u.COSRegion,
 			&u.Enabled, &u.AllowActiveMode, &u.RefuseOverwrite, &u.MaxSessions,
+			&u.FTPEnabled, &u.SFTPEnabled,
 			&u.CreatedAt, &u.UpdatedAt, &u.DeletedAt, &u.LastLogin); err != nil {
 			return nil, err
 		}

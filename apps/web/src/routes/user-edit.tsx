@@ -15,7 +15,8 @@ export function UserEdit() {
   const user = q.data?.find((u) => u.username === username);
 
   const mutation = useMutation({
-    mutationFn: (values: { root_folder: string; enabled: boolean }) => updateUser(username, values),
+    mutationFn: (values: { root_folder: string; enabled: boolean; ftp_enabled: boolean; sftp_enabled: boolean }) =>
+      updateUser(username, values),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["users"] });
       nav({ to: "/users" });
@@ -31,7 +32,14 @@ export function UserEdit() {
       initial={user}
       submitting={mutation.isPending}
       error={mutation.error ? String(mutation.error) : null}
-      onSubmit={(values) => mutation.mutate({ root_folder: values.root_folder, enabled: values.enabled })}
+      onSubmit={(values) =>
+        mutation.mutate({
+          root_folder: values.root_folder,
+          enabled: values.enabled,
+          ftp_enabled: values.ftp_enabled,
+          sftp_enabled: values.sftp_enabled,
+        })
+      }
       onCancel={() => nav({ to: "/users" })}
     />
   );

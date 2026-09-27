@@ -34,8 +34,17 @@ function EditIcon() {
 function ResetIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="9" cy="9" r="5" />
-      <path d="m13 13 7 7m-3-7 3-3-2-2" />
+      <rect x="4" y="11" width="16" height="9" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+    </svg>
+  );
+}
+
+function KeyIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="8" cy="15" r="4" />
+      <path d="m10.5 12.5 8-8M16 5l3 3m-6.5 1.5L15 12" />
     </svg>
   );
 }
@@ -67,6 +76,7 @@ export function Users() {
   const [search, setSearch] = useState("");
   const [sorting, setSorting] = useState<SortingState>([]);
   const [deleteTarget, setDeleteTarget] = useState<FTPUser | null>(null);
+  const [disableTarget, setDisableTarget] = useState<FTPUser | null>(null);
 
   const q = useQuery({
     queryKey: ["users"],
@@ -74,7 +84,24 @@ export function Users() {
   });
 
   const toggleEnabled = useMutation({
-    mutationFn: (u: FTPUser) => updateUser(u.username, { root_folder: u.root_folder, enabled: !u.enabled }),
+    mutationFn: (u: FTPUser) =>
+      updateUser(u.username, {
+        root_folder: u.root_folder,
+        enabled: !u.enabled,
+        ftp_enabled: u.ftp_enabled,
+        sftp_enabled: u.sftp_enabled,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
+  });
+
+  const toggleProtocol = useMutation({
+    mutationFn: (p: { u: FTPUser; protocol: "ftp_enabled" | "sftp_enabled" }) =>
+      updateUser(p.u.username, {
+        root_folder: p.u.root_folder,
+        enabled: p.u.enabled,
+        ftp_enabled: p.protocol === "ftp_enabled" ? !p.u.ftp_enabled : p.u.ftp_enabled,
+        sftp_enabled: p.protocol === "sftp_enabled" ? !p.u.sftp_enabled : p.u.sftp_enabled,
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
   });
 
@@ -105,7 +132,32 @@ export function Users() {
       }),
       columnHelper.accessor("enabled", {
         header: "Status",
-        cell: (info) => <Stamp label={info.getValue() ? "Enabled" : "Disabled"} tone={info.getValue() ? "blue" : "red"} />,
+        cell: (info) => {
+          const u = info.row.original;
+          return (
+            <div className="status-cell">
+              <Stamp label={info.getValue() ? "Enabled" : "Disabled"} tone={info.getValue() ? "blue" : "red"} />
+              <div className="status-proto">
+                <button
+                  className={`proto-toggle ${u.ftp_enabled ? "on" : "off"}`}
+                  onClick={() => toggleProtocol.mutate({ u, protocol: "ftp_enabled" })}
+                  title={u.enabled ? (u.ftp_enabled ? "Disable FTP" : "Enable FTP") : "User is disabled"}
+                  disabled={!u.enabled || toggleProtocol.isPending}
+                >
+                  FTP
+                </button>
+                <button
+                  className={`proto-toggle ${u.sftp_enabled ? "on" : "off"}`}
+                  onClick={() => toggleProtocol.mutate({ u, protocol: "sftp_enabled" })}
+                  title={u.enabled ? (u.sftp_enabled ? "Disable SFTP" : "Enable SFTP") : "User is disabled"}
+                  disabled={!u.enabled || toggleProtocol.isPending}
+                >
+                  SFTP
+                </button>
+              </div>
+            </div>
+          );
+        },
       }),
       columnHelper.accessor("created_at", {
         header: "Created",
@@ -146,10 +198,23 @@ export function Users() {
                 <ResetIcon />
               </button>
               <button
+                aria-label={`Set SFTP key for ${u.username}`}
+                title="Set SFTP public key"
+                onClick={() =>
+                  nav({ to: "/users/$username/sftp-key", from: "/users", params: { username: u.username } })
+                }
+              >
+                <KeyIcon />
+              </button>
+              <button
                 aria-label={u.enabled ? `Disable ${u.username}` : `Enable ${u.username}`}
                 title={u.enabled ? "Disable" : "Enable"}
                 className={u.enabled ? "danger" : ""}
-                onClick={() => toggleEnabled.mutate(u)}
+                onClick={() => {
+                  if (u.enabled) setDisableTarget(u);
+                  else toggleEnabled.mutate(u);
+                }}
+                disabled={toggleEnabled.isPending}
               >
                 <PowerIcon />
               </button>
@@ -161,7 +226,7 @@ export function Users() {
         },
       }),
     ],
-    [nav, toggleEnabled],
+    [nav, toggleEnabled, toggleProtocol],
   );
 
   const table = useReactTable({
@@ -276,6 +341,35 @@ export function Users() {
                 disabled={removeUser.isPending}
               >
                 {removeUser.isPending ? "Deleting..." : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {disableTarget && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="disable-user-title">
+          <div className="modal-dialog">
+            <h3 id="disable-user-title">Disable user</h3>
+            <p className="modal-body">
+              Disable FTP user <strong>{disableTarget.username}</strong>? They won't be able to log in via FTP or SFTP until re-enabled.
+            </p>
+            {toggleEnabled.isError && <p className="err">{String(toggleEnabled.error)}</p>}
+            <div className="form-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setDisableTarget(null)} disabled={toggleEnabled.isPending}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={() => {
+                  toggleEnabled.mutate(disableTarget, {
+                    onSuccess: () => setDisableTarget(null),
+                  });
+                }}
+                disabled={toggleEnabled.isPending}
+              >
+                {toggleEnabled.isPending ? "Disabling..." : "Disable"}
               </button>
             </div>
           </div>

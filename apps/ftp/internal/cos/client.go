@@ -2,6 +2,8 @@ package cos
 
 import (
 	"context"
+	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -87,7 +89,7 @@ func (c *Client) setHTTP(creds creds) {
 // with fresh credentials. Any other error, or a failed retry, is returned as-is.
 func (c *Client) do(ctx context.Context, op func() error) error {
 	err := op()
-	if err == nil || !isAuthErr(err) || c.Chain == nil {
+	if err == nil || !IsAuthErr(err) || c.Chain == nil {
 		return err
 	}
 	c.Chain.Invalidate()
@@ -97,10 +99,10 @@ func (c *Client) do(ctx context.Context, op func() error) error {
 	return op()
 }
 
-// isAuthErr matches the credential-error codes COS returns when the request
+// IsAuthErr matches the credential-error codes COS returns when the request
 // was rejected for authentication reasons. Substring match on Error() — the
 // COS SDK wraps server responses without exposing a typed sentinel.
-func isAuthErr(err error) bool {
+func IsAuthErr(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -115,6 +117,23 @@ func isAuthErr(err error) bool {
 		if strings.Contains(s, sub) {
 			return true
 		}
+	}
+	return false
+}
+
+// IsUnavailable reports whether err indicates the COS backend itself is
+// unreachable or failing (network error, timeout, or a 5xx response) as
+// opposed to a client-side auth/config problem.
+func IsUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if resp, ok := cos.IsCOSError(err); ok && resp.Response != nil && resp.Response.StatusCode >= 500 {
+		return true
 	}
 	return false
 }

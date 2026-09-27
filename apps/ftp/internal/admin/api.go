@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/example/cos-ftp-server/internal/audit"
+	"github.com/example/cos-ftp-server/internal/core"
 	"github.com/example/cos-ftp-server/internal/cos"
 	"github.com/example/cos-ftp-server/internal/db"
 	"github.com/example/cos-ftp-server/internal/telemetry"
@@ -22,9 +23,14 @@ type API struct {
 	COSBucket          string
 	COSRegion          string
 	COSClient          *cos.Client
+	Storage            core.ObjectStorage
 	DefaultRootPrefix  string
+	FTPEnabled         bool
 	FTPAddress         string
 	FTPPublicAddress   string
+	SFTPEnabled        bool
+	SFTPAddress        string
+	SFTPPublicAddress  string
 	oidc               *oidcAuth
 }
 
@@ -32,9 +38,12 @@ type API struct {
 // assigned to newly provisioned FTP users (per-user bucket selection is not
 // yet implemented — see main.go's M2 wiring note). cosClient is used to create
 // each new user's root folder placeholder; pass nil to skip (e.g. in tests).
-// defaultRootPrefix is the bucket-relative prefix the folder-suggestion
-// endpoint lists from (e.g. "/t/t/"). Call ConfigureOIDC afterwards to enable SSO login.
-func New(pool *pgxpool.Pool, cookieSecure bool, cosBucket, cosRegion string, cosClient *cos.Client, defaultRootPrefix string, auditLog *audit.Logger) *API {
+// storage backs the file browse/download endpoints (userFsFor) and is
+// backend-agnostic; pass nil to disable file browsing (e.g. in tests using
+// memFsForTest). defaultRootPrefix is the bucket-relative prefix the
+// folder-suggestion endpoint lists from (e.g. "/t/t/"). Call ConfigureOIDC
+// afterwards to enable SSO login.
+func New(pool *pgxpool.Pool, cookieSecure bool, cosBucket, cosRegion string, cosClient *cos.Client, storage core.ObjectStorage, defaultRootPrefix string, auditLog *audit.Logger) *API {
 	if defaultRootPrefix == "" {
 		defaultRootPrefix = "/t/t/"
 	}
@@ -45,6 +54,7 @@ func New(pool *pgxpool.Pool, cookieSecure bool, cosBucket, cosRegion string, cos
 		COSBucket:         cosBucket,
 		COSRegion:         cosRegion,
 		COSClient:         cosClient,
+		Storage:           storage,
 		DefaultRootPrefix: defaultRootPrefix,
 	}
 }
@@ -71,6 +81,7 @@ func (a *API) Routes() http.Handler {
 			r.Post("/api/v1/users", a.createUser)
 			r.Patch("/api/v1/users/{username}", a.updateUser)
 			r.Post("/api/v1/users/{username}/password", a.resetUserPassword)
+			r.Post("/api/v1/users/{username}/sftp-key", a.setUserSFTPKey)
 			r.Delete("/api/v1/users/{username}", a.deleteUser)
 		})
 	})

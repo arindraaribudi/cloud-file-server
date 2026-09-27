@@ -44,6 +44,7 @@ export function Audit() {
                 <th>Time</th>
                 <th>User</th>
                 <th>IP</th>
+                <th>Type</th>
                 <th>Action</th>
                 <th>Path</th>
                 <th>Result</th>
@@ -55,6 +56,7 @@ export function Audit() {
                   <td className="mono">{e.event_time}</td>
                   <td className="mono">{e.username}</td>
                   <td className="mono">{e.client_ip}</td>
+                  <td>{e.event_type}</td>
                   <td>{e.action}</td>
                   <td className="mono">{e.path}</td>
                   <td>

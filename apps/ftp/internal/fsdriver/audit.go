@@ -1,6 +1,7 @@
 package fsdriver
 
 import (
+	"net"
 	"os"
 
 	"github.com/google/uuid"
@@ -11,21 +12,22 @@ import (
 
 // AuditFS wraps a per-user ClientDriver so every file command (upload,
 // download, delete, rename, mkdir) is recorded in the audit trail. All
-// events for one FTP connection share a session ID.
+// events for one FTP connection share a session ID and client IP.
 type AuditFS struct {
 	afero.Fs
 	audit    *audit.Logger
 	username string
+	clientIP net.IP
 	session  uuid.UUID
 }
 
-func NewAuditFS(fs afero.Fs, log *audit.Logger, username string) *AuditFS {
-	return &AuditFS{Fs: fs, audit: log, username: username, session: uuid.New()}
+func NewAuditFS(fs afero.Fs, log *audit.Logger, username string, clientIP net.IP) *AuditFS {
+	return &AuditFS{Fs: fs, audit: log, username: username, clientIP: clientIP, session: uuid.New()}
 }
 
 func (a *AuditFS) log(action, path string, bytes int64, err error) {
 	a.audit.Log(audit.Event{
-		Username: a.username, SessionID: a.session,
+		Username: a.username, ClientIP: a.clientIP, SessionID: a.session,
 		Action: action, Path: path, Bytes: bytes, Success: err == nil,
 	})
 }

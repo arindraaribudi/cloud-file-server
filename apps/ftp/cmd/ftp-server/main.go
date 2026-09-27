@@ -20,10 +20,12 @@ import (
 	"github.com/example/cos-ftp-server/internal/audit"
 	"github.com/example/cos-ftp-server/internal/auth"
 	"github.com/example/cos-ftp-server/internal/config"
+	"github.com/example/cos-ftp-server/internal/core"
 	"github.com/example/cos-ftp-server/internal/cos"
 	"github.com/example/cos-ftp-server/internal/db"
 	"github.com/example/cos-ftp-server/internal/fsdriver"
 	"github.com/example/cos-ftp-server/internal/ftpserver"
+	"github.com/example/cos-ftp-server/internal/sftpserver"
 )
 
 
@@ -47,6 +49,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return fmt.Errorf("db: %w", err)
 	}
 	defer pool.Close()
+
+	log.Info("protocols: startup",
+		"ftp_enabled", cfg.FTPEnabled, "ftp_listen", cfg.FTPListen,
+		"sftp_enabled", cfg.SFTPEnabled, "sftp_listen", cfg.SFTPListen,
+	)
 
 	log.Info("db: checking migrations")
 	if err := db.Migrate(cfg.DatabaseURL); err != nil {
@@ -78,41 +85,17 @@ func run(ctx context.Context, log *slog.Logger) error {
 	auditLog := audit.New(pool, log)
 	defer func() { _ = auditLog.Close(context.Background()) }()
 
-	chain, err := cos.NewChainFromEnv(ctx, cfg.COSStaticSecretID, cfg.COSStaticSecretKey, cfg.COSStaticSessionToken, cfg.STSRefreshRatio)
+	storage, err := fsdriver.NewObjectStorage(cfg.StorageBackend, cfg, auditLog, log)
 	if err != nil {
-		return err
+		return fmt.Errorf("storage: %w", err)
 	}
-	chain.OnRefresh = func(src string, ok bool, refreshErr error) {
-		attrs := []any{"bucket", cfg.COSBucket, "region", cfg.COSRegion, "source", src}
-		if ok {
-			log.Info("cred refresh ok", attrs...)
-		} else {
-			log.Warn("cred refresh failed", append(attrs, "err", refreshErr)...)
-		}
-		detail := map[string]any{"bucket": cfg.COSBucket, "region": cfg.COSRegion}
-		if refreshErr != nil {
-			detail["err"] = refreshErr.Error()
-		}
-		auditLog.Log(audit.Event{
-			Action: "CRED_REFRESH",
-			Source: src,
-			Success: ok,
-			Detail: detail,
-		})
+	if err := storage.Init(ctx); err != nil {
+		return fmt.Errorf("storage: %w", err)
 	}
-	if _, src, err := chain.Get(ctx); err != nil {
-		return fmt.Errorf("cos: credential validation failed at startup: %w", err)
-	} else {
-		log.Info("cos: credential chain validated", "source", src)
+	var cosClient *cos.Client
+	if cp, ok := storage.(*fsdriver.COSPlugin); ok {
+		cosClient = cp.Client()
 	}
-	if claims, err := cos.WebIdentityClaims(); err != nil {
-		log.Warn("cos: could not decode web-identity token claims", "err", err)
-	} else {
-		log.Info("cos: web-identity token claims", "sub", claims["sub"], "iss", claims["iss"], "role_arn", os.Getenv("TKE_ROLE_ARN"))
-	}
-	log.Info("cos: credential chain ready", "tke_pod_identity", cos.HasTKEPodIdentity(), "static_fallback", chain.HasStatic())
-	client := cos.NewClientWithChain(cfg.COSBucket, cfg.COSRegion, chain)
-	log.Info("cos: client connected", "bucket", cfg.COSBucket, "region", cfg.COSRegion)
 
 	srv := &ftpserver.Server{
 		Addr:             cfg.FTPListen,
@@ -121,6 +104,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 		IdleTimeout:      cfg.IdleTimeout,
 		ProxyProtocol:    cfg.FTPProxyProtocol,
 		NewDriver: func(u *db.FTPUser, clientIP string) (ftpserverlib.ClientDriver, error) {
+			fs, err := storage.Mount(u.RootFolder)
+			if err != nil {
+				return nil, fmt.Errorf("mount: %w", err)
+			}
 			log.Info("ftp: user connected", "username", u.Username, "client_ip", clientIP, "bucket", cfg.COSBucket, "region", cfg.COSRegion, "root_prefix", u.RootFolder)
 			auditLog.Log(audit.Event{
 				Username: u.Username,
@@ -129,9 +116,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 				Success:  true,
 				Detail:   map[string]any{"bucket": cfg.COSBucket, "region": cfg.COSRegion, "root_prefix": u.RootFolder},
 			})
-			return fsdriver.NewAuditFS(fsdriver.NewCOS(u.RootFolder, client), auditLog, u.Username), nil
+			return fsdriver.NewAuditFS(fs, auditLog, u.Username, net.ParseIP(clientIP)), nil
 		},
-		Authenticator: &ftpserver.DBAuthenticator{
+		Authenticator: &core.DBAuthenticator{
 			Pool:    pool,
 			Lockout: auth.NewLockout(cfg.AuthLockoutLimit, cfg.AuthLockoutWindow),
 			Audit:   auditLog,
@@ -145,8 +132,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 			KeyFile:  cfg.FTPTLSKey,
 		}
 	}
-	if err := srv.Start(ctx); err != nil {
-		return err
+	if cfg.FTPEnabled {
+		if err := srv.Start(ctx); err != nil {
+			return err
+		}
 	}
 	if srv.TLS != nil {
 		if cert, err := tls.LoadX509KeyPair(srv.TLS.CertFile, srv.TLS.KeyFile); err == nil && len(cert.Certificate) > 0 {
@@ -158,15 +147,45 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}
 	}
 
+	var sftpSrv *sftpserver.Server
+	if cfg.SFTPEnabled {
+		hostKey, err := sftpserver.LoadOrGenerateHostKey(cfg.SFTPHostKey, log)
+		if err != nil {
+			return fmt.Errorf("sftp: host key: %w", err)
+		}
+		sftpSrv = &sftpserver.Server{
+			Addr:          cfg.SFTPListen,
+			HostKeySigner: hostKey,
+			// Same *core.DBAuthenticator instance srv.Authenticator uses
+			// (constructed above, in the ftpserver.Server{} literal) —
+			// per the design, brute-force lockout is shared across both
+			// protocols for the same username.
+			Authenticator: srv.Authenticator,
+			LookupUser: func(ctx context.Context, username string) (*db.FTPUser, error) {
+				return db.GetFTPUserPublicKey(ctx, pool, username)
+			},
+			Storage: storage,
+			Audit:   auditLog,
+			Logger:  log,
+		}
+		if err := sftpSrv.Start(ctx); err != nil {
+			return fmt.Errorf("sftp: %w", err)
+		}
+		log.Info("sftp: listening", "addr", cfg.SFTPListen)
+	}
+
 	// Admin API + metrics on cfg.AdminListen (default :8080).
-	adminClient := cos.NewClientWithChain(cfg.COSBucket, cfg.COSRegion, chain)
-	adminAPI := admin.New(pool, cfg.AdminCookieSecure, cfg.COSBucket, cfg.COSRegion, adminClient, cfg.FTPDefaultRootPrefix, auditLog)
+	adminAPI := admin.New(pool, cfg.AdminCookieSecure, cfg.COSBucket, cfg.COSRegion, cosClient, storage, cfg.FTPDefaultRootPrefix, auditLog)
 	if cfg.FTPPublicIP != "" {
 		adminAPI.FTPAddress = cfg.FTPPublicIP + cfg.FTPListen
+		adminAPI.SFTPAddress = cfg.FTPPublicIP + cfg.SFTPListen
 	}
 	if u, err := url.Parse(cfg.PublicURL); err == nil && u.Hostname() != "" {
 		adminAPI.FTPPublicAddress = u.Hostname() + cfg.FTPListen
+		adminAPI.SFTPPublicAddress = u.Hostname() + cfg.SFTPListen
 	}
+	adminAPI.FTPEnabled = cfg.FTPEnabled
+	adminAPI.SFTPEnabled = cfg.SFTPEnabled
 	if cfg.OIDCIssuerURL != "" {
 		oidcCtx, cancelOIDC := context.WithTimeout(ctx, 10*time.Second)
 		err := adminAPI.ConfigureOIDC(oidcCtx, admin.OIDCConfig{
@@ -206,6 +225,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 			return fmt.Errorf("admin: %w", err)
 		}
 	default:
+	}
+	if sftpSrv != nil {
+		_ = sftpSrv.Stop()
 	}
 	return srv.Stop()
 }

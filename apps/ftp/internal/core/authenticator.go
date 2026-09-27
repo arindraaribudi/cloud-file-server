@@ -1,0 +1,77 @@
+package core
+
+import (
+	"context"
+	"errors"
+	"net"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/example/cos-ftp-server/internal/audit"
+	"github.com/example/cos-ftp-server/internal/auth"
+	"github.com/example/cos-ftp-server/internal/db"
+)
+
+// errAuthFailed is returned for every authentication failure so callers
+// can't distinguish "wrong password" from "unknown user" (username
+// enumeration). Specific reasons stay in the audit Detail.
+var errAuthFailed = errors.New("login failed")
+
+// DBAuthenticator looks up ftp_users in PostgreSQL and verifies bcrypt
+// passwords. Implements Authenticator.
+type DBAuthenticator struct {
+	Pool    *pgxpool.Pool
+	Lockout *auth.Lockout
+	Audit   *audit.Logger
+}
+
+var _ Authenticator = (*DBAuthenticator)(nil)
+
+func (a *DBAuthenticator) Authenticate(user, pass string, clientIP net.IP) (*db.FTPUser, error) {
+	ctx := context.Background()
+	if !a.Lockout.Allow(user) {
+		a.Audit.Log(audit.Event{
+			Username: user, ClientIP: clientIP, Action: "LOGIN", Success: false,
+			Detail: map[string]any{"reason": "locked_out"},
+		})
+		return nil, errAuthFailed
+	}
+	dbCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	u, err := db.GetFTPUserByUsername(dbCtx, a.Pool, user)
+	if err != nil {
+		a.Lockout.RecordFailure(user)
+		a.Audit.Log(audit.Event{
+			Username: user, ClientIP: clientIP, Action: "LOGIN", Success: false,
+			Detail: map[string]any{"reason": "db_error", "err": err.Error()},
+		})
+		return nil, errAuthFailed
+	}
+	if !u.Enabled {
+		a.Audit.Log(audit.Event{
+			Username: user, ClientIP: clientIP, Action: "LOGIN", Success: false,
+			Detail: map[string]any{"reason": "disabled"},
+		})
+		return nil, errAuthFailed
+	}
+	if !auth.VerifyPassword(u.PasswordHash, pass) {
+		a.Lockout.RecordFailure(user)
+		a.Audit.Log(audit.Event{
+			Username: user, ClientIP: clientIP, Action: "LOGIN", Success: false,
+			Detail: map[string]any{"reason": "bad_password"},
+		})
+		return nil, errAuthFailed
+	}
+	a.Lockout.Reset(user)
+	if err := db.SetFTPUserLastLogin(dbCtx, a.Pool, u.ID); err != nil {
+		a.Audit.Log(audit.Event{
+			Username: user, ClientIP: clientIP, Action: "LOGIN", Success: false,
+			Detail: map[string]any{"reason": "last_login_update_failed", "err": err.Error()},
+		})
+	}
+	a.Audit.Log(audit.Event{
+		Username: user, ClientIP: clientIP, Action: "LOGIN", Success: true,
+	})
+	return u, nil
+}

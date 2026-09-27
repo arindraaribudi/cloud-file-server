@@ -28,3 +28,5 @@ dist/
 !.env.example
 info
 k8s
+.claude
+archive

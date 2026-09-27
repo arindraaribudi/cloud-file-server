@@ -145,7 +145,7 @@ func (a *API) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	a.Audit.Log(audit.Event{Username: username, Action: "ADMIN_LOGIN", Success: true, Detail: map[string]any{"role": role, "method": "oidc"}})
+	a.Audit.Log(audit.Event{Username: username, ClientIP: clientIP(r), Action: "ADMIN_LOGIN", Success: true, Detail: map[string]any{"role": role, "method": "oidc"}})
 	http.SetCookie(w, cookie)
 	http.Redirect(w, r, a.oidc.cfg.FrontendRedirect, http.StatusFound)
 }

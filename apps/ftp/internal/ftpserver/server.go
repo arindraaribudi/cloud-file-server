@@ -17,13 +17,9 @@ import (
 	proxyproto "github.com/pires/go-proxyproto"
 
 	"github.com/example/cos-ftp-server/internal/audit"
+	"github.com/example/cos-ftp-server/internal/core"
 	"github.com/example/cos-ftp-server/internal/db"
 )
-
-// Authenticator checks user credentials and returns the authenticated user's record.
-type Authenticator interface {
-	Authenticate(user, pass string) (*db.FTPUser, error)
-}
 
 type TLSConfig struct {
 	CertFile string
@@ -53,7 +49,7 @@ type Server struct {
 	ProxyProtocol    bool
 	TLS              *TLSConfig
 	NewDriver        func(u *db.FTPUser, clientIP string) (ftpserver.ClientDriver, error) // builds the per-user root/bucket driver
-	Authenticator    Authenticator
+	Authenticator    core.Authenticator
 	Audit            *audit.Logger
 	Logger           *slog.Logger
 
@@ -75,6 +71,7 @@ type Server struct {
 // Compile-time checks.
 var _ ftpserver.MainDriver = (*Server)(nil)
 var _ ftpserver.MainDriverExtensionPassiveWrapper = (*Server)(nil)
+var _ core.Touchpoint = (*Server)(nil)
 
 func (s *Server) GetSettings() (*ftpserver.Settings, error) {
 	listenAddr := s.Addr
@@ -134,24 +131,49 @@ func (s *Server) ClientConnected(ftpserver.ClientContext) (string, error) {
 // a LOGOUT audit event.
 func (s *Server) ClientDisconnected(cc ftpserver.ClientContext) {
 	if username, ok := cc.Extra().(string); ok && username != "" {
-		s.Audit.Log(audit.Event{Username: username, Action: "LOGOUT", Success: true})
+		s.Audit.Log(audit.Event{Username: username, ClientIP: clientIPFromAddr(cc.RemoteAddr().String()), Action: "LOGOUT", Success: true})
 	}
+}
+
+// ftpAccessDenied reports whether u is blocked from the FTP touchpoint
+// specifically. The account-wide kill switch (u.Enabled) is already
+// enforced by core.DBAuthenticator before AuthUser sees u at all.
+func ftpAccessDenied(u *db.FTPUser) bool {
+	return !u.FTPEnabled
+}
+
+// clientIPFromAddr parses "host:port" RemoteAddr into net.IP, falling back
+// to 127.0.0.1 when parsing fails so audit rows never store NULL.
+func clientIPFromAddr(addr string) net.IP {
+	if host, _, err := net.SplitHostPort(addr); err == nil && host != "" {
+		if ip := net.ParseIP(host); ip != nil {
+			return ip
+		}
+	}
+	return net.IPv4(127, 0, 0, 1)
 }
 
 func (s *Server) AuthUser(cc ftpserver.ClientContext, user, pass string) (ftpserver.ClientDriver, error) {
 	if s.Authenticator == nil {
 		return nil, fmt.Errorf("ftpserver: auth failed for user %q", user)
 	}
-	u, err := s.Authenticator.Authenticate(user, pass)
+	clientIP := clientIPFromAddr(cc.RemoteAddr().String())
+	u, err := s.Authenticator.Authenticate(user, pass, clientIP)
 	if err != nil {
+		return nil, fmt.Errorf("ftpserver: auth failed for user %q", user)
+	}
+	if ftpAccessDenied(u) {
+		s.Audit.Log(audit.Event{
+			Username: user, ClientIP: clientIP, Action: "LOGIN", Success: false,
+			Detail: map[string]any{"reason": "ftp_disabled"},
+		})
 		return nil, fmt.Errorf("ftpserver: auth failed for user %q", user)
 	}
 	if s.NewDriver == nil {
 		return nil, fmt.Errorf("ftpserver: no driver factory configured")
 	}
 	cc.SetExtra(u.Username)
-	clientIP, _, _ := net.SplitHostPort(cc.RemoteAddr().String())
-	return s.NewDriver(u, clientIP)
+	return s.NewDriver(u, clientIP.String())
 }
 
 func (s *Server) GetTLSConfig() (*tls.Config, error) {

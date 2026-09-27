@@ -128,3 +128,101 @@ func TestAdminUserCreate(t *testing.T) {
 		t.Errorf("Role=%q", got.Role)
 	}
 }
+
+func TestFTPUserProtocolFlagsDefaults(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	pool, err := New(context.Background(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	ctx := context.Background()
+	_, _ = pool.Exec(ctx, `DELETE FROM ftp_users WHERE username = 'protocol-flags-test'`)
+
+	u := &FTPUser{
+		Username:     "protocol-flags-test",
+		PasswordHash: "x",
+		RootFolder:   "/protocol-flags-test",
+		COSBucket:    "b",
+		Enabled:      true,
+		FTPEnabled:   true,
+	}
+	id, err := CreateFTPUser(ctx, pool, u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = SoftDeleteFTPUser(ctx, pool, id) }()
+
+	got, err := GetFTPUserByUsername(ctx, pool, "protocol-flags-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.FTPEnabled {
+		t.Error("expected FTPEnabled=true")
+	}
+	if got.SFTPEnabled {
+		t.Error("expected SFTPEnabled=false by default")
+	}
+}
+
+func TestSFTPPublicKeyRoundTrip(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	pool, err := New(context.Background(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	ctx := context.Background()
+	_, _ = pool.Exec(ctx, `DELETE FROM ftp_users WHERE username = 'sftp-key-test'`)
+
+	u := &FTPUser{
+		Username:     "sftp-key-test",
+		PasswordHash: "x",
+		RootFolder:   "/sftp-key-test",
+		COSBucket:    "b",
+		Enabled:      true,
+		SFTPEnabled:  true,
+	}
+	id, err := CreateFTPUser(ctx, pool, u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = SoftDeleteFTPUser(ctx, pool, id) }()
+
+	got, err := GetFTPUserPublicKey(ctx, pool, "sftp-key-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SFTPPublicKey != "" {
+		t.Errorf("expected empty key initially, got %q", got.SFTPPublicKey)
+	}
+
+	const key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleNotARealKeyPadding0000 test@example"
+	if err := SetFTPUserSFTPKey(ctx, pool, id, key); err != nil {
+		t.Fatal(err)
+	}
+	got2, err := GetFTPUserPublicKey(ctx, pool, "sftp-key-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got2.SFTPPublicKey != key {
+		t.Errorf("SFTPPublicKey=%q, want %q", got2.SFTPPublicKey, key)
+	}
+
+	if err := SetFTPUserSFTPKey(ctx, pool, id, ""); err != nil {
+		t.Fatal(err)
+	}
+	got3, err := GetFTPUserPublicKey(ctx, pool, "sftp-key-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got3.SFTPPublicKey != "" {
+		t.Errorf("expected cleared key, got %q", got3.SFTPPublicKey)
+	}
+}

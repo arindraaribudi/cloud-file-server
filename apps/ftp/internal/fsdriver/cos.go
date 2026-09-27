@@ -3,6 +3,8 @@ package fsdriver
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -12,6 +14,28 @@ import (
 
 	"github.com/example/cos-ftp-server/internal/cos"
 )
+
+// Sentinels callers can match with errors.Is to get a specific, safe reason
+// without leaking bucket names/hostnames from the raw COS error (see
+// cos.ErrorResponse.Error(), which embeds the full request URL).
+var (
+	ErrBackendAuth        = errors.New("storage backend rejected credentials")
+	ErrBackendUnavailable = errors.New("storage backend unavailable")
+)
+
+// wrapBackendErr classifies a raw COS SDK/network error into one of the
+// sentinels above, keeping the original error wrapped (for server-side logs)
+// without exposing it directly to callers that surface err.Error() to users.
+func wrapBackendErr(err error) error {
+	switch {
+	case cos.IsAuthErr(err):
+		return fmt.Errorf("%w: %v", ErrBackendAuth, err)
+	case cos.IsUnavailable(err):
+		return fmt.Errorf("%w: %v", ErrBackendUnavailable, err)
+	default:
+		return err
+	}
+}
 
 // COS implements afero.Fs (and therefore ftpserver.ClientDriver) against a
 // Tencent COS bucket. Folders are virtual: a folder exists iff ≥1 child
@@ -49,7 +73,7 @@ func (v *COS) ReadDir(name string) ([]os.FileInfo, error) {
 	prefix := v.fullKey(name)
 	entries, err := v.c.List(ctx, prefix)
 	if err != nil {
-		return nil, err
+		return nil, wrapBackendErr(err)
 	}
 	out := make([]os.FileInfo, 0, len(entries))
 	for _, e := range entries {

@@ -9,6 +9,7 @@ export function UserPassword() {
 
   const mutation = useMutation({
     mutationFn: (password: string) => resetUserPassword(username, password),
+    onSuccess: () => nav({ to: "/users" }),
   });
 
   return (

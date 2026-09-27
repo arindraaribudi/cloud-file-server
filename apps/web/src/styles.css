@@ -102,6 +102,17 @@ a { color: var(--stamp-blue); }
 .row-actions button:hover { border-color: var(--stamp-blue); color: var(--stamp-blue); }
 .row-actions button.danger:hover { border-color: var(--stamp-red); color: var(--stamp-red); }
 .row-actions button { display: inline-flex; align-items: center; justify-content: center; }
+.proto-toggle {
+  font-family: var(--font-body); font-size: .72rem; font-weight: 600; letter-spacing: .03em;
+  border: 1px solid transparent; border-radius: 4px; padding: .2rem .5rem; cursor: pointer; line-height: 1;
+}
+.proto-toggle.on { background: #28a745; border-color: #28a745; color: #fff; }
+.proto-toggle.on:hover { background: #218838; border-color: #218838; color: #fff; }
+.proto-toggle.off { background: #6c757d; border-color: #6c757d; color: #fff; }
+.proto-toggle.off:hover { background: #5a6268; border-color: #5a6268; color: #fff; }
+.proto-toggle:disabled { opacity: .6; cursor: not-allowed; }
+.status-cell { display: flex; align-items: center; gap: .6rem; }
+.status-proto { display: flex; gap: .35rem; }
 .ledger th.sortable { cursor: pointer; user-select: none; }
 .ledger td.empty-cell { text-align: center; color: #55606b; padding: 1.5rem; }
 .pagination { display: flex; align-items: center; justify-content: center; gap: 1rem; margin-top: 1rem; font-size: .9rem; color: #3d4b58; }
@@ -131,6 +142,14 @@ a { color: var(--stamp-blue); }
   font-family: var(--font-body); font-size: 1rem; padding: .6rem .7rem;
   border: 1px solid var(--border); border-radius: 4px; background: #fff; width: 100%;
 }
+.input-wrap { position: relative; }
+.input-wrap input { padding-right: 2.4rem; }
+.input-icon {
+  position: absolute; right: .35rem; top: 50%; transform: translateY(-50%);
+  background: transparent; border: 0; padding: .25rem; cursor: pointer;
+  color: #55606b; display: inline-flex; align-items: center; justify-content: center;
+}
+.input-icon:hover { color: var(--ink-navy); }
 .field input:read-only { background: var(--paper-shade); color: #55606b; }
 .switch-row { display: flex; align-items: center; gap: .6rem; margin-bottom: 1.4rem; }
 .switch-row label { font-family: var(--font-body); font-size: .92rem; font-weight: 500; }
