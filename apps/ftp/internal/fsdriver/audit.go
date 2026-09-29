@@ -1,6 +1,8 @@
 package fsdriver
 
 import (
+	"io"
+	"net"
 	"os"
 
 	"github.com/google/uuid"
@@ -11,26 +13,44 @@ import (
 
 // AuditFS wraps a per-user ClientDriver so every file command (upload,
 // download, delete, rename, mkdir) is recorded in the audit trail. All
-// events for one FTP connection share a session ID.
+// events for one FTP/SFTP connection share a session ID, client IP,
+// connection type, and root folder.
 type AuditFS struct {
 	afero.Fs
-	audit    *audit.Logger
-	username string
-	session  uuid.UUID
+	audit           *audit.Logger
+	username        string
+	clientIP        net.IP
+	connectionType  string // "ftp" or "sftp"
+	backendLocation string // "cos" or "local"
+	rootFolder      string
+	session         uuid.UUID
 }
 
-func NewAuditFS(fs afero.Fs, log *audit.Logger, username string) *AuditFS {
-	return &AuditFS{Fs: fs, audit: log, username: username, session: uuid.New()}
+func NewAuditFS(fs afero.Fs, log *audit.Logger, username string, clientIP net.IP, connectionType, backendLocation, rootFolder string) *AuditFS {
+	return &AuditFS{Fs: fs, audit: log, username: username, clientIP: clientIP, connectionType: connectionType, backendLocation: backendLocation, rootFolder: rootFolder, session: uuid.New()}
 }
 
 func (a *AuditFS) log(action, path string, bytes int64, err error) {
 	a.audit.Log(audit.Event{
-		Username: a.username, SessionID: a.session,
+		Username: a.username, ClientIP: a.clientIP, SessionID: a.session,
 		Action: action, Path: path, Bytes: bytes, Success: err == nil,
+		ConnectionType: a.connectionType, BackendLocation: a.backendLocation, RootFolder: a.rootFolder,
 	})
 }
 
 func (a *AuditFS) Open(name string) (afero.File, error) {
+	// ftpserverlib's LIST handler does Open+Readdir on the file handle, not
+	// Fs.ReadDir. For directory paths, return a dirFile that exposes the
+	// underlying Fs.ReadDir (which surfaces empty-folder placeholders on
+	// COS); file paths keep the auditFile DOWNLOAD path.
+	if info, err := a.Stat(name); err == nil && info.IsDir() {
+		entries, err := a.listDir(name)
+		a.log("LIST", name, 0, err)
+		if err != nil {
+			return nil, err
+		}
+		return &dirFile{name: name, entries: entries}, nil
+	}
 	f, err := a.Fs.Open(name)
 	if err != nil {
 		a.log("DOWNLOAD", name, 0, err)
@@ -62,24 +82,24 @@ func (a *AuditFS) OpenFile(name string, flag int, perm os.FileMode) (afero.File,
 }
 
 // ReadDir handles the FTP LIST command, logged as its own "LIST" action
-// separate from DOWNLOAD/UPLOAD. Fs implementations that provide a direct
-// listing (e.g. COS, which lists by prefix instead of opening a virtual
-// directory) are called directly; otherwise fall back to Open+Readdir like
-// ftpserverlib itself would.
+// separate from DOWNLOAD/UPLOAD. Used directly by SFTP and the admin web;
+// FTP goes through Open+Readdir instead and is routed via dirFile in Open.
 func (a *AuditFS) ReadDir(name string) ([]os.FileInfo, error) {
-	var (
-		entries []os.FileInfo
-		err     error
-	)
+	entries, err := a.listDir(name)
+	a.log("LIST", name, 0, err)
+	return entries, err
+}
+
+// listDir prefers the inner Fs's own ReadDir when exposed (e.g. COS, which
+// lists by prefix and surfaces empty-folder placeholders), otherwise falls
+// back to Open+Readdir like ftpserverlib itself would.
+func (a *AuditFS) listDir(name string) ([]os.FileInfo, error) {
 	if lister, ok := a.Fs.(interface {
 		ReadDir(string) ([]os.FileInfo, error)
 	}); ok {
-		entries, err = lister.ReadDir(name)
-	} else {
-		entries, err = afero.ReadDir(a.Fs, name)
+		return lister.ReadDir(name)
 	}
-	a.log("LIST", name, 0, err)
-	return entries, err
+	return afero.ReadDir(a.Fs, name)
 }
 
 func (a *AuditFS) Remove(name string) error {
@@ -140,4 +160,69 @@ func (f *auditFile) Close() error {
 		f.onClose(f.n)
 	}
 	return err
+}
+
+// dirFile is a read-only afero.File backed by a pre-fetched directory listing.
+// ftpserverlib drives FTP LIST through Open(name) → f.Readdir(-1) on the
+// returned handle, never through Fs.ReadDir; without this wrapper COS-backed
+// directories whose only contents are folder placeholders come back empty
+// because readOnlyFile.Readdir returns nil. Readdir/Readdirnames honor the
+// same count semantics as os.File.Readdir (count<=0 drains the rest).
+type dirFile struct {
+	name    string
+	entries []os.FileInfo
+	offset  int
+	closed  bool
+}
+
+func (d *dirFile) Read([]byte) (int, error)                { return 0, io.EOF }
+func (d *dirFile) ReadAt([]byte, int64) (int, error)       { return 0, io.EOF }
+func (d *dirFile) Seek(int64, int) (int64, error)          { return 0, nil }
+func (d *dirFile) Close() error                            { d.closed = true; return nil }
+func (d *dirFile) Sync() error                             { return nil }
+func (d *dirFile) Truncate(int64) error                    { return os.ErrInvalid }
+func (d *dirFile) Write([]byte) (int, error)               { return 0, os.ErrInvalid }
+func (d *dirFile) WriteAt([]byte, int64) (int, error)      { return 0, os.ErrInvalid }
+func (d *dirFile) WriteString(string) (int, error)         { return 0, os.ErrInvalid }
+
+func (d *dirFile) Name() string { return d.name }
+
+func (d *dirFile) Stat() (os.FileInfo, error) {
+	return &fileInfo{name: d.name, mode: os.ModeDir | 0o755, isDir: true}, nil
+}
+
+func (d *dirFile) Readdir(count int) ([]os.FileInfo, error) {
+	if d.offset >= len(d.entries) {
+		if count <= 0 {
+			return nil, nil
+		}
+		return nil, io.EOF
+	}
+	if count <= 0 {
+		out := d.entries[d.offset:]
+		d.offset = len(d.entries)
+		return out, nil
+	}
+	end := d.offset + count
+	if end > len(d.entries) {
+		end = len(d.entries)
+	}
+	out := d.entries[d.offset:end]
+	d.offset = end
+	if d.offset >= len(d.entries) {
+		return out, io.EOF
+	}
+	return out, nil
+}
+
+func (d *dirFile) Readdirnames(count int) ([]string, error) {
+	infos, err := d.Readdir(count)
+	if err != nil || infos == nil {
+		return nil, err
+	}
+	out := make([]string, len(infos))
+	for i, fi := range infos {
+		out[i] = fi.Name()
+	}
+	return out, nil
 }

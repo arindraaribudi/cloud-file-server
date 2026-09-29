@@ -31,6 +31,12 @@ func TestLoadDefaults(t *testing.T) {
 	if c.STSRefreshRatio != 0.8 {
 		t.Errorf("STSRefreshRatio=%v", c.STSRefreshRatio)
 	}
+	if c.StorageBackend != "cos.objectstorage.plugin" {
+		t.Errorf("StorageBackend=%q", c.StorageBackend)
+	}
+	if c.StorageLocalRoot != "./data" {
+		t.Errorf("StorageLocalRoot=%q", c.StorageLocalRoot)
+	}
 }
 
 func TestLoadRequiresDatabaseURL(t *testing.T) {
@@ -47,6 +53,8 @@ func TestLoadEnvOverrides(t *testing.T) {
 	t.Setenv("FTP_IDLE_TIMEOUT", "600s")
 	t.Setenv("STS_REFRESH_RATIO", "0.5")
 	t.Setenv("AUDIT_RETENTION_DAYS", "180")
+	t.Setenv("STORAGE_BACKEND", "local.objectstorage.plugin")
+	t.Setenv("STORAGE_LOCAL_ROOT", "/tmp/ftp-storage-test")
 	t.Setenv("ADMIN_LISTEN", ":8080")
 	t.Setenv("LOG_LEVEL", "info")
 	t.Setenv("LOG_FORMAT", "json")
@@ -65,6 +73,12 @@ func TestLoadEnvOverrides(t *testing.T) {
 	}
 	if c.AuditRetentionDays != 180 {
 		t.Errorf("AuditRetentionDays=%d", c.AuditRetentionDays)
+	}
+	if c.StorageBackend != "local.objectstorage.plugin" {
+		t.Errorf("StorageBackend=%q", c.StorageBackend)
+	}
+	if c.StorageLocalRoot != "/tmp/ftp-storage-test" {
+		t.Errorf("StorageLocalRoot=%q", c.StorageLocalRoot)
 	}
 }
 
@@ -100,5 +114,45 @@ func TestLoadInvalidPassiveRange(t *testing.T) {
 				t.Fatalf("expected error for %q", tc.val)
 			}
 		})
+	}
+}
+
+func TestLoadSFTPDefaults(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://u:p@h:5432/d")
+	t.Setenv("SFTP_ENABLED", "")
+	t.Setenv("SFTP_LISTEN", "")
+	t.Setenv("SFTP_HOST_KEY", "")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SFTPEnabled {
+		t.Error("expected SFTPEnabled=false by default")
+	}
+	if c.SFTPListen != ":2222" {
+		t.Errorf("SFTPListen=%q", c.SFTPListen)
+	}
+	if c.SFTPHostKey != "" {
+		t.Errorf("SFTPHostKey=%q, want empty", c.SFTPHostKey)
+	}
+}
+
+func TestLoadSFTPEnvOverrides(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://u:p@h:5432/d")
+	t.Setenv("SFTP_ENABLED", "true")
+	t.Setenv("SFTP_LISTEN", ":3333")
+	t.Setenv("SFTP_HOST_KEY", "c29tZS1iYXNlNjQtdmFsdWU=")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.SFTPEnabled {
+		t.Error("expected SFTPEnabled=true")
+	}
+	if c.SFTPListen != ":3333" {
+		t.Errorf("SFTPListen=%q", c.SFTPListen)
+	}
+	if c.SFTPHostKey != "c29tZS1iYXNlNjQtdmFsdWU=" {
+		t.Errorf("SFTPHostKey=%q", c.SFTPHostKey)
 	}
 }

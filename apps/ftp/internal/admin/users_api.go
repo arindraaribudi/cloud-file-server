@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/example/cos-ftp-server/internal/audit"
 	"github.com/example/cos-ftp-server/internal/auth"
@@ -24,10 +25,12 @@ func normalizeRootFolder(s string) string {
 
 func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Username   string `json:"username"`
-		RootFolder string `json:"root_folder"`
-		Password   string `json:"password"`
-		Enabled    bool   `json:"enabled"`
+		Username    string `json:"username"`
+		RootFolder  string `json:"root_folder"`
+		Password    string `json:"password"`
+		Enabled     bool   `json:"enabled"`
+		FTPEnabled  *bool  `json:"ftp_enabled"`
+		SFTPEnabled *bool  `json:"sftp_enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -61,6 +64,14 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
+	ftpEnabled := true
+	if body.FTPEnabled != nil {
+		ftpEnabled = *body.FTPEnabled
+	}
+	sftpEnabled := false
+	if body.SFTPEnabled != nil {
+		sftpEnabled = *body.SFTPEnabled
+	}
 	u := &db.FTPUser{
 		Username:     body.Username,
 		PasswordHash: hash,
@@ -69,6 +80,8 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		COSRegion:    a.COSRegion,
 		Enabled:      body.Enabled,
 		MaxSessions:  5,
+		FTPEnabled:   ftpEnabled,
+		SFTPEnabled:  sftpEnabled,
 	}
 	if _, err := db.CreateFTPUser(r.Context(), a.Pool, u); err != nil {
 		var pgErr *pgconn.PgError
@@ -84,7 +97,7 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	a.Audit.Log(audit.Event{Username: CurrentUser(r), Action: "ADMIN_CREATE_USER", Path: created.Username, Success: true})
+	a.Audit.Log(audit.Event{Username: CurrentUser(r), ClientIP: clientIP(r), Action: "ADMIN_CREATE_USER", Path: created.Username, Success: true})
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(created)
 }
@@ -92,8 +105,10 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 func (a *API) updateUser(w http.ResponseWriter, r *http.Request) {
 	username := chi.URLParam(r, "username")
 	var body struct {
-		RootFolder string `json:"root_folder"`
-		Enabled    bool   `json:"enabled"`
+		RootFolder  string `json:"root_folder"`
+		Enabled     bool   `json:"enabled"`
+		FTPEnabled  *bool  `json:"ftp_enabled"`
+		SFTPEnabled *bool  `json:"sftp_enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -115,6 +130,12 @@ func (a *API) updateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	existing.RootFolder = body.RootFolder
 	existing.Enabled = body.Enabled
+	if body.FTPEnabled != nil {
+		existing.FTPEnabled = *body.FTPEnabled
+	}
+	if body.SFTPEnabled != nil {
+		existing.SFTPEnabled = *body.SFTPEnabled
+	}
 	if err := db.UpdateFTPUser(r.Context(), a.Pool, existing); err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
@@ -124,7 +145,7 @@ func (a *API) updateUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	a.Audit.Log(audit.Event{Username: CurrentUser(r), Action: "ADMIN_UPDATE_USER", Path: username, Success: true})
+	a.Audit.Log(audit.Event{Username: CurrentUser(r), ClientIP: clientIP(r), Action: "ADMIN_UPDATE_USER", Path: username, Success: true})
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(updated)
 }
@@ -159,7 +180,7 @@ func (a *API) resetUserPassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	a.Audit.Log(audit.Event{Username: CurrentUser(r), Action: "ADMIN_RESET_PASSWORD", Path: username, Success: true})
+	a.Audit.Log(audit.Event{Username: CurrentUser(r), ClientIP: clientIP(r), Action: "ADMIN_RESET_PASSWORD", Path: username, Success: true})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -177,6 +198,38 @@ func (a *API) deleteUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	a.Audit.Log(audit.Event{Username: CurrentUser(r), Action: "ADMIN_DELETE_USER", Path: username, Success: true})
+	a.Audit.Log(audit.Event{Username: CurrentUser(r), ClientIP: clientIP(r), Action: "ADMIN_DELETE_USER", Path: username, Success: true})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) setUserSFTPKey(w http.ResponseWriter, r *http.Request) {
+	username := chi.URLParam(r, "username")
+	var body struct {
+		PublicKey string `json:"public_key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	body.PublicKey = strings.TrimSpace(body.PublicKey)
+	if body.PublicKey != "" {
+		if _, _, _, _, err := ssh.ParseAuthorizedKey([]byte(body.PublicKey)); err != nil {
+			http.Error(w, "invalid public key: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	existing, err := db.GetFTPUserByUsername(r.Context(), a.Pool, username)
+	if errors.Is(err, db.ErrNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	if err := db.SetFTPUserSFTPKey(r.Context(), a.Pool, existing.ID, body.PublicKey); err != nil {
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	a.Audit.Log(audit.Event{Username: CurrentUser(r), ClientIP: clientIP(r), Action: "ADMIN_SET_SFTP_KEY", Path: username, Success: true})
 	w.WriteHeader(http.StatusNoContent)
 }

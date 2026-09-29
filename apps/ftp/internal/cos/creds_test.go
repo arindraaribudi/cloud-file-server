@@ -48,7 +48,10 @@ func TestChainFailsWhenNoFallback(t *testing.T) {
 }
 
 func TestChainNotifiesOnRefresh(t *testing.T) {
-	type call struct{ src string; ok bool }
+	type call struct {
+		src string
+		ok  bool
+	}
 	var calls []call
 	sts := &fakeSTS{out: creds{ID: "STS_ID", Expiry: time.Now().Add(time.Hour)}}
 	st := &fakeStatic{id: "ST_ID", key: "ST_KEY"}

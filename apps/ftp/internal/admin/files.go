@@ -63,18 +63,18 @@ func writeJSONError(w http.ResponseWriter, status int, code, msg string) {
 // driver. nil in production.
 var memFsForTest afero.Fs
 
-// errNoCOS reports that the server has no COS client configured.
-var errNoCOS = errors.New("COS client not configured (server missing COS credentials)")
+// errStorageNotConfigured reports that the server has no storage backend configured.
+var errStorageNotConfigured = errors.New("storage backend not configured")
 
-// userFsFor returns an afero.Fs rooted at the user's COS folder.
+// userFsFor returns an afero.Fs rooted at the user's storage folder.
 func (a *API) userFsFor(u *db.FTPUser) (afero.Fs, error) {
 	if memFsForTest != nil {
 		return memFsForTest, nil
 	}
-	if a.COSClient == nil {
-		return nil, errNoCOS
+	if a.Storage == nil {
+		return nil, errStorageNotConfigured
 	}
-	return fsdriver.NewCOS(u.RootFolder, a.COSClient), nil
+	return a.Storage.Mount(u.RootFolder)
 }
 
 // loadUser parses {userId} from URL and loads the FTPUser.
@@ -141,13 +141,18 @@ func (a *API) listFiles(w http.ResponseWriter, r *http.Request, u *db.FTPUser) {
 	}
 	infos, err := readDir(fs, rel)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		switch {
+		case errors.Is(err, os.ErrNotExist):
 			writeJSONError(w, http.StatusNotFound, codeNotFound, "folder not found")
-			return
+		case errors.Is(err, fsdriver.ErrBackendAuth):
+			writeJSONError(w, http.StatusBadGateway, codeInternal, "storage backend rejected credentials")
+		case errors.Is(err, fsdriver.ErrBackendUnavailable):
+			writeJSONError(w, http.StatusServiceUnavailable, codeInternal, "storage backend unavailable")
+		default:
+			// Never surface err.Error() to the client: COS errors can carry
+			// bucket names, hostnames and credential hints.
+			writeJSONError(w, http.StatusInternalServerError, codeInternal, "storage error")
 		}
-		// Never surface err.Error() to the client: COS errors can carry
-		// bucket names, hostnames and credential hints.
-		writeJSONError(w, http.StatusInternalServerError, codeInternal, "storage error")
 		return
 	}
 	sortEntries(infos)
@@ -247,8 +252,14 @@ func clientIP(r *http.Request) net.IP {
 			return ip
 		}
 	}
-	host, _, _ := net.SplitHostPort(r.RemoteAddr)
-	return net.ParseIP(host)
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && host != "" {
+		if ip := net.ParseIP(host); ip != nil {
+			return ip
+		}
+	}
+	// Fallback for empty/unparseable RemoteAddr (loopback sockets, tests):
+	// always record an IP rather than NULL so audit filters work.
+	return net.IPv4(127, 0, 0, 1)
 }
 
 func mimeByName(name string) string {

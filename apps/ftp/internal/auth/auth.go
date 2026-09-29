@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	bcryptCost          = 12
-	errWeakPassword     = "password must be at least 8 characters and include an uppercase letter, a lowercase letter, and a digit"
+	bcryptCost      = 12
+	errWeakPassword = "password must be at least 8 characters and include an uppercase letter, a lowercase letter, and a digit"
 )
 
 func HashPassword(plain string) (string, error) {

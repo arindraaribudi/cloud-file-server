@@ -13,7 +13,8 @@ export function Audit() {
   const rows = (q.data ?? []).filter(
     (e) =>
       e.username.toLowerCase().includes(search.toLowerCase()) ||
-      e.path.toLowerCase().includes(search.toLowerCase()),
+      e.path.toLowerCase().includes(search.toLowerCase()) ||
+      e.root_folder.toLowerCase().includes(search.toLowerCase()),
   );
 
   return (
@@ -44,6 +45,10 @@ export function Audit() {
                 <th>Time</th>
                 <th>User</th>
                 <th>IP</th>
+                <th>Proto</th>
+                <th>Backend</th>
+                <th>Root</th>
+                <th>Type</th>
                 <th>Action</th>
                 <th>Path</th>
                 <th>Result</th>
@@ -55,6 +60,10 @@ export function Audit() {
                   <td className="mono">{e.event_time}</td>
                   <td className="mono">{e.username}</td>
                   <td className="mono">{e.client_ip}</td>
+                  <td>{e.connection_type || "—"}</td>
+                  <td>{e.backend_location || "—"}</td>
+                  <td className="mono">{e.root_folder || "—"}</td>
+                  <td>{e.event_type}</td>
                   <td>{e.action}</td>
                   <td className="mono">{e.path}</td>
                   <td>

@@ -23,7 +23,10 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://ftp:ftp@postgres:5432/ftp?sslmode=disable
-      FTP_LISTEN: ":2121"
+      FTP_LISTEN: ":${FTP_PORT:-2121}"
+      FTP_ENABLED: ${FTP_ENABLED:-true}
+      SFTP_LISTEN: ":${SFTP_PORT:-2222}"
+      SFTP_ENABLED: ${SFTP_ENABLED:-true}
       FTP_PUBLIC_IP: ${FTP_PUBLIC_IP:-}
       FTP_PASSIVE_PORT_RANGE: "50000-50999"
       FTP_ALLOW_PLAIN: "true"
@@ -47,7 +50,8 @@ services:
       OIDC_FRONTEND_REDIRECT_URL: ${OIDC_FRONTEND_REDIRECT_URL:-/auth/callback}
       FTP_DEFAULT_ROOT_PREFIX: ${FTP_DEFAULT_ROOT_PREFIX:-/t/t/}
     ports:
-      - "2121:2121"
+      - "${FTP_PORT:-2121}:${FTP_PORT:-2121}"
+      - "${SFTP_PORT:-2222}:${SFTP_PORT:-2222}"
       - "7000:7000"
       - "50000-50999:50000-50999"
 

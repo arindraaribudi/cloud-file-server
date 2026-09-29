@@ -6,6 +6,7 @@ import { Users } from "./routes/users";
 import { UserNew } from "./routes/user-new";
 import { UserEdit } from "./routes/user-edit";
 import { UserPassword } from "./routes/user-password";
+import { UserSFTPKey } from "./routes/user-sftp-key";
 import { Audit } from "./routes/audit";
 import { Files } from "./routes/files";
 
@@ -63,6 +64,12 @@ const userPasswordRoute = createRoute({
   component: UserPassword,
 });
 
+const userSFTPKeyRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: "/users/$username/sftp-key",
+  component: UserSFTPKey,
+});
+
 const auditRoute = createRoute({
   getParentRoute: () => authedRoute,
   path: "/audit",
@@ -88,6 +95,7 @@ export const router = createRouter({
       userNewRoute,
       userEditRoute,
       userPasswordRoute,
+      userSFTPKeyRoute,
       auditRoute,
       filesRoute,
     ]),

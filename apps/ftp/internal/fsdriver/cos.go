@@ -3,6 +3,8 @@ package fsdriver
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -12,6 +14,28 @@ import (
 
 	"github.com/example/cos-ftp-server/internal/cos"
 )
+
+// Sentinels callers can match with errors.Is to get a specific, safe reason
+// without leaking bucket names/hostnames from the raw COS error (see
+// cos.ErrorResponse.Error(), which embeds the full request URL).
+var (
+	ErrBackendAuth        = errors.New("storage backend rejected credentials")
+	ErrBackendUnavailable = errors.New("storage backend unavailable")
+)
+
+// wrapBackendErr classifies a raw COS SDK/network error into one of the
+// sentinels above, keeping the original error wrapped (for server-side logs)
+// without exposing it directly to callers that surface err.Error() to users.
+func wrapBackendErr(err error) error {
+	switch {
+	case cos.IsAuthErr(err):
+		return fmt.Errorf("%w: %v", ErrBackendAuth, err)
+	case cos.IsUnavailable(err):
+		return fmt.Errorf("%w: %v", ErrBackendUnavailable, err)
+	default:
+		return err
+	}
+}
 
 // COS implements afero.Fs (and therefore ftpserver.ClientDriver) against a
 // Tencent COS bucket. Folders are virtual: a folder exists iff ≥1 child
@@ -49,7 +73,7 @@ func (v *COS) ReadDir(name string) ([]os.FileInfo, error) {
 	prefix := v.fullKey(name)
 	entries, err := v.c.List(ctx, prefix)
 	if err != nil {
-		return nil, err
+		return nil, wrapBackendErr(err)
 	}
 	out := make([]os.FileInfo, 0, len(entries))
 	for _, e := range entries {
@@ -179,21 +203,21 @@ func newReadOnlyFile(r *bytes.Reader, name string, size int64) *readOnlyFile {
 	return &readOnlyFile{r: r, name: name, size: size}
 }
 
-func (f *readOnlyFile) Read(p []byte) (int, error)         { return f.r.Read(p) }
-func (f *readOnlyFile) ReadAt(p []byte, off int64) (int, error) { return f.r.ReadAt(p, off) }
+func (f *readOnlyFile) Read(p []byte) (int, error)                { return f.r.Read(p) }
+func (f *readOnlyFile) ReadAt(p []byte, off int64) (int, error)   { return f.r.ReadAt(p, off) }
 func (f *readOnlyFile) Seek(off int64, whence int) (int64, error) { return f.r.Seek(off, whence) }
-func (f *readOnlyFile) Close() error                       { f.closed = true; return nil }
-func (f *readOnlyFile) Name() string                       { return f.name }
+func (f *readOnlyFile) Close() error                              { f.closed = true; return nil }
+func (f *readOnlyFile) Name() string                              { return f.name }
 func (f *readOnlyFile) Stat() (os.FileInfo, error) {
 	return &fileInfo{name: f.name, size: f.size, mode: 0o644}, nil
 }
-func (f *readOnlyFile) Sync() error                          { return nil }
-func (f *readOnlyFile) Truncate(size int64) error            { return os.ErrInvalid }
+func (f *readOnlyFile) Sync() error                              { return nil }
+func (f *readOnlyFile) Truncate(size int64) error                { return os.ErrInvalid }
 func (f *readOnlyFile) Readdir(count int) ([]os.FileInfo, error) { return nil, nil }
-func (f *readOnlyFile) Readdirnames(n int) ([]string, error) { return nil, nil }
-func (f *readOnlyFile) Write(p []byte) (int, error)         { return 0, os.ErrInvalid }
+func (f *readOnlyFile) Readdirnames(n int) ([]string, error)     { return nil, nil }
+func (f *readOnlyFile) Write(p []byte) (int, error)              { return 0, os.ErrInvalid }
 func (f *readOnlyFile) WriteAt(p []byte, off int64) (int, error) { return 0, os.ErrInvalid }
-func (f *readOnlyFile) WriteString(s string) (int, error)   { return 0, os.ErrInvalid }
+func (f *readOnlyFile) WriteString(s string) (int, error)        { return 0, os.ErrInvalid }
 
 // memWriteFile is a tiny in-memory buffer that flushes to COS on Close.
 type memWriteFile struct {
@@ -207,7 +231,7 @@ func (m *memWriteFile) Read(p []byte) (int, error) { return 0, os.ErrInvalid }
 func (m *memWriteFile) ReadAt(p []byte, off int64) (int, error) {
 	return bytes.NewReader(m.buf.Bytes()).ReadAt(p, off)
 }
-func (m *memWriteFile) Write(p []byte) (int, error)  { return m.buf.Write(p) }
+func (m *memWriteFile) Write(p []byte) (int, error) { return m.buf.Write(p) }
 func (m *memWriteFile) WriteAt(p []byte, off int64) (int, error) {
 	if off != int64(m.buf.Len()) {
 		return 0, os.ErrInvalid
@@ -235,4 +259,4 @@ func (m *memWriteFile) Truncate(size int64) error {
 	return nil
 }
 func (m *memWriteFile) Readdir(count int) ([]os.FileInfo, error) { return nil, nil }
-func (m *memWriteFile) Readdirnames(count int) ([]string, error)  { return nil, nil }
+func (m *memWriteFile) Readdirnames(count int) ([]string, error) { return nil, nil }

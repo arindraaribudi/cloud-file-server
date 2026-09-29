@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/example/cos-ftp-server/internal/db"
 )
 
 func TestServerStartsAndStops(t *testing.T) {
@@ -74,5 +76,14 @@ func TestAuthTLSRejectedWhenNotConfigured(t *testing.T) {
 	}
 	if _, err := r.ReadString('\n'); err != nil {
 		t.Fatalf("QUIT reply: %v", err)
+	}
+}
+
+func TestFtpAccessDenied(t *testing.T) {
+	if ftpAccessDenied(&db.FTPUser{FTPEnabled: true}) {
+		t.Error("expected access allowed when FTPEnabled=true")
+	}
+	if !ftpAccessDenied(&db.FTPUser{FTPEnabled: false}) {
+		t.Error("expected access denied when FTPEnabled=false")
 	}
 }
