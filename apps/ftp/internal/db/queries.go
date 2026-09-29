@@ -14,18 +14,18 @@ var ErrNotFound = errors.New("not found")
 const ftpUserColumns = "id, username, password_hash, root_folder, cos_bucket, COALESCE(cos_region, ''), enabled, allow_active_mode, refuse_overwrite, max_sessions, ftp_enabled, sftp_enabled, created_at, updated_at, deleted_at, last_login"
 
 type FTPUser struct {
-	ID              int64      `json:"id"`
-	Username        string     `json:"username"`
-	PasswordHash    string     `json:"-"`
-	RootFolder      string     `json:"root_folder"`
-	COSBucket       string     `json:"cos_bucket"`
-	COSRegion       string     `json:"cos_region"`
-	Enabled         bool       `json:"enabled"`
-	AllowActiveMode bool       `json:"allow_active_mode"`
-	RefuseOverwrite bool       `json:"refuse_overwrite"`
-	MaxSessions     int        `json:"max_sessions"`
-	FTPEnabled      bool       `json:"ftp_enabled"`
-	SFTPEnabled     bool       `json:"sftp_enabled"`
+	ID              int64  `json:"id"`
+	Username        string `json:"username"`
+	PasswordHash    string `json:"-"`
+	RootFolder      string `json:"root_folder"`
+	COSBucket       string `json:"cos_bucket"`
+	COSRegion       string `json:"cos_region"`
+	Enabled         bool   `json:"enabled"`
+	AllowActiveMode bool   `json:"allow_active_mode"`
+	RefuseOverwrite bool   `json:"refuse_overwrite"`
+	MaxSessions     int    `json:"max_sessions"`
+	FTPEnabled      bool   `json:"ftp_enabled"`
+	SFTPEnabled     bool   `json:"sftp_enabled"`
 	// SFTPPublicKey is never included in ftpUserColumns/the general JSON
 	// response — fetched only via GetFTPUserPublicKey, which the SFTP
 	// touchpoint uses for its pubkey-auth lookup.

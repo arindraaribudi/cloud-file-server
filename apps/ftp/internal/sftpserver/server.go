@@ -24,6 +24,10 @@ import (
 // audit Detail.
 var errAuthFailed = errors.New("sftpserver: login failed")
 
+// ConnType is the value stamped on every audit event this touchpoint emits.
+// Owns its own protocol name — audit is a sink, it doesn't define the set.
+const ConnType = "sftp"
+
 // clientIPFromAddr extracts the host portion of a "host:port" RemoteAddr
 // and parses it as an IP. Falls back to the IPv4 loopback when parsing
 // fails or addr is empty (e.g. nil RemoteAddr in tests) so the audit row
@@ -73,14 +77,15 @@ func (s *Server) passwordCallback(conn ssh.ConnMetadata, pass []byte) (*ssh.Perm
 		return nil, errAuthFailed
 	}
 	clientIP := clientIPFromAddr(conn.RemoteAddr().String())
-	u, err := s.Authenticator.Authenticate(conn.User(), string(pass), clientIP)
+	u, err := s.Authenticator.Authenticate(conn.User(), string(pass), ConnType, clientIP)
 	if err != nil {
 		return nil, errAuthFailed
 	}
 	if !u.SFTPEnabled {
 		s.Audit.Log(audit.Event{
 			Username: conn.User(), ClientIP: clientIP, Action: "LOGIN", Success: false,
-			Detail: map[string]any{"reason": "sftp_disabled", "protocol": "sftp"},
+			ConnectionType: ConnType,
+			Detail:         map[string]any{"reason": "sftp_disabled"},
 		})
 		return nil, errAuthFailed
 	}
@@ -99,7 +104,8 @@ func (s *Server) publicKeyCallback(conn ssh.ConnMetadata, key ssh.PublicKey) (*s
 	if !u.Enabled || !u.SFTPEnabled || u.SFTPPublicKey == "" {
 		s.Audit.Log(audit.Event{
 			Username: conn.User(), ClientIP: clientIP, Action: "LOGIN", Success: false,
-			Detail: map[string]any{"reason": "sftp_pubkey_denied", "protocol": "sftp"},
+			ConnectionType: ConnType,
+			Detail:         map[string]any{"reason": "sftp_pubkey_denied"},
 		})
 		return nil, errAuthFailed
 	}
@@ -110,13 +116,15 @@ func (s *Server) publicKeyCallback(conn ssh.ConnMetadata, key ssh.PublicKey) (*s
 	if !bytes.Equal(stored.Marshal(), key.Marshal()) {
 		s.Audit.Log(audit.Event{
 			Username: conn.User(), ClientIP: clientIP, Action: "LOGIN", Success: false,
-			Detail: map[string]any{"reason": "pubkey_mismatch", "protocol": "sftp"},
+			ConnectionType: ConnType,
+			Detail:         map[string]any{"reason": "pubkey_mismatch"},
 		})
 		return nil, errAuthFailed
 	}
 	s.Audit.Log(audit.Event{
 		Username: conn.User(), ClientIP: clientIP, Action: "LOGIN", Success: true,
-		Detail: map[string]any{"protocol": "sftp", "method": "publickey"},
+		ConnectionType: ConnType,
+		Detail:         map[string]any{"method": "publickey"},
 	})
 	return &ssh.Permissions{}, nil
 }
@@ -207,10 +215,11 @@ func (s *Server) serveSFTP(sconn *ssh.ServerConn, ch ssh.Channel) {
 		return
 	}
 	clientIP := clientIPFromAddr(sconn.RemoteAddr().String())
-	auditedFS := fsdriver.NewAuditFS(fs, s.Audit, u.Username, clientIP)
+	backend := s.Storage.BackendLocation()
+	auditedFS := fsdriver.NewAuditFS(fs, s.Audit, u.Username, clientIP, ConnType, backend, u.RootFolder)
 	handlers := fsdriver.NewSFTPHandlers(auditedFS)
 	reqServer := sftp.NewRequestServer(ch, handlers)
 	_ = reqServer.Serve()
 	_ = reqServer.Close()
-	s.Audit.Log(audit.Event{Username: u.Username, ClientIP: clientIP, Action: "LOGOUT", Success: true})
+	s.Audit.Log(audit.Event{Username: u.Username, ClientIP: clientIP, Action: "LOGOUT", Success: true, ConnectionType: ConnType, BackendLocation: backend, RootFolder: u.RootFolder})
 }

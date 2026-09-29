@@ -106,6 +106,13 @@ func (p *COSPlugin) Mount(rootFolder string) (afero.Fs, error) {
 	return NewCOS(rootFolder, p.client), nil
 }
 
+// BackendLocation returns the COS bucket endpoint URL the plugin is
+// configured against. Surfaces in the audit log so each row tells you which
+// bucket/region it hit without joining cfg.
+func (p *COSPlugin) BackendLocation() string {
+	return "https://" + p.Bucket + ".cos." + p.Region + ".myqcloud.com"
+}
+
 // Client exposes the underlying *cos.Client for the two admin endpoints
 // that are COS-specific by design (folder-suggestion listing, root-folder
 // placeholder creation on user creation) and are out of scope for this
@@ -128,3 +135,6 @@ func (p *LocalPlugin) Mount(rootFolder string) (afero.Fs, error) {
 	}
 	return NewLocal(dir), nil
 }
+
+// BackendLocation identifies local-disk storage in the audit log.
+func (p *LocalPlugin) BackendLocation() string { return "local://" + p.Root }

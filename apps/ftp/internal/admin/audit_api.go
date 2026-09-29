@@ -22,7 +22,7 @@ func (a *API) queryAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	offset, _ := strconv.Atoi(q.Get("offset"))
 
-	sql := `SELECT event_time, username, client_ip::text, session_id, action, event_type, path, bytes, success, source, detail
+	sql := `SELECT event_time, username, client_ip::text, session_id, action, event_type, connection_type, backend_location, root_folder, path, bytes, success, source, detail
 		FROM audit_events WHERE event_time BETWEEN $1 AND $2`
 	args := []any{parseTimeOr(from, time.Now().Add(-30*24*time.Hour)), parseTimeOr(to, time.Now())}
 	i := 3
@@ -60,19 +60,23 @@ func (a *API) queryAudit(w http.ResponseWriter, r *http.Request) {
 		var sid *string
 		var act string
 		var etype string
+		var ctype string
+		var backend string
+		var rfolder string
 		var p string
 		var b int64
 		var ok bool
 		var src *string
 		var detail []byte
-		if err := rows.Scan(&et, &uname, &cip, &sid, &act, &etype, &p, &b, &ok, &src, &detail); err != nil {
+		if err := rows.Scan(&et, &uname, &cip, &sid, &act, &etype, &ctype, &backend, &rfolder, &p, &b, &ok, &src, &detail); err != nil {
 			slog.Error("queryAudit: scan failed", "err", err)
 			http.Error(w, "internal", http.StatusInternalServerError)
 			return
 		}
 		rec := map[string]any{
 			"event_time": et, "username": uname, "client_ip": cip, "session_id": sid,
-			"action": act, "event_type": etype, "path": p, "bytes": b, "success": ok, "source": src,
+			"action": act, "event_type": etype, "connection_type": ctype, "backend_location": backend, "root_folder": rfolder,
+			"path": p, "bytes": b, "success": ok, "source": src,
 			"detail": json.RawMessage(detail),
 		}
 		out = append(out, rec)
@@ -85,7 +89,7 @@ func (a *API) exportAuditCSV(w http.ResponseWriter, r *http.Request) {
 	from := parseTimeOr(q.Get("from"), time.Now().Add(-30*24*time.Hour))
 	to := parseTimeOr(q.Get("to"), time.Now())
 	rows, err := a.Pool.Query(r.Context(),
-		`SELECT event_time, username, client_ip::text, action, event_type, path, bytes, success FROM audit_events
+		`SELECT event_time, username, client_ip::text, action, event_type, connection_type, backend_location, root_folder, path, bytes, success FROM audit_events
 		 WHERE event_time BETWEEN $1 AND $2 ORDER BY event_time`, from, to)
 	if err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)
@@ -96,20 +100,23 @@ func (a *API) exportAuditCSV(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", `attachment; filename="audit.csv"`)
 	cw := csv.NewWriter(w)
 	defer cw.Flush()
-	_ = cw.Write([]string{"event_time", "username", "client_ip", "action", "event_type", "path", "bytes", "success"})
+	_ = cw.Write([]string{"event_time", "username", "client_ip", "action", "event_type", "connection_type", "backend_location", "root_folder", "path", "bytes", "success"})
 	for rows.Next() {
 		var et time.Time
 		var u string
 		var cip *string
 		var act string
 		var etype string
+		var ctype string
+		var backend string
+		var rfolder string
 		var p string
 		var b int64
 		var ok bool
-		if err := rows.Scan(&et, &u, &cip, &act, &etype, &p, &b, &ok); err != nil {
+		if err := rows.Scan(&et, &u, &cip, &act, &etype, &ctype, &backend, &rfolder, &p, &b, &ok); err != nil {
 			continue
 		}
-		_ = cw.Write([]string{et.UTC().Format(time.RFC3339), u, deref(cip), act, etype, p, strconv.FormatInt(b, 10), strconv.FormatBool(ok)})
+		_ = cw.Write([]string{et.UTC().Format(time.RFC3339), u, deref(cip), act, etype, ctype, backend, rfolder, p, strconv.FormatInt(b, 10), strconv.FormatBool(ok)})
 	}
 }
 

@@ -16,17 +16,20 @@ import (
 )
 
 type Event struct {
-	EventTime time.Time      `json:"event_time"`
-	Username  string         `json:"username"`
-	ClientIP  net.IP         `json:"client_ip"`
-	SessionID uuid.UUID      `json:"session_id"`
-	Action    string         `json:"action"`
-	EventType string         `json:"event_type"` // high-level category: auth/file_access/admin/system/other
-	Path      string         `json:"path"`
-	Bytes     int64          `json:"bytes"`
-	Success   bool           `json:"success"`
-	Source    string         `json:"source"` // for CRED_REFRESH only
-	Detail    map[string]any `json:"detail"`
+	EventTime      time.Time      `json:"event_time"`
+	Username       string         `json:"username"`
+	ClientIP       net.IP         `json:"client_ip"`
+	SessionID      uuid.UUID      `json:"session_id"`
+	Action         string         `json:"action"`
+	EventType      string         `json:"event_type"` // high-level category: auth/file_access/admin/system/other
+	ConnectionType string         `json:"connection_type"` // protocol touchpoint name; each touchpoint defines its own const
+	BackendLocation string        `json:"backend_location"` // "cos" | "local" | "" for non-storage events
+	RootFolder     string         `json:"root_folder"`
+	Path           string         `json:"path"`
+	Bytes          int64          `json:"bytes"`
+	Success        bool           `json:"success"`
+	Source         string         `json:"source"` // for CRED_REFRESH only
+	Detail         map[string]any `json:"detail"`
 }
 
 // classifyEventType maps an action string to a high-level category. Callers
@@ -141,9 +144,9 @@ func (l *Logger) writeBatch(ctx context.Context, batch []Event) error {
 		}
 		_, err = tx.Exec(ctx, `
 			INSERT INTO audit_events
-			(event_time, username, client_ip, session_id, action, event_type, path, bytes, success, source, detail)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-			e.EventTime, e.Username, ip, e.SessionID, e.Action, e.EventType, e.Path, e.Bytes, e.Success, src, detail)
+			(event_time, username, client_ip, session_id, action, event_type, connection_type, backend_location, root_folder, path, bytes, success, source, detail)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+			e.EventTime, e.Username, ip, e.SessionID, e.Action, e.EventType, e.ConnectionType, e.BackendLocation, e.RootFolder, e.Path, e.Bytes, e.Success, src, detail)
 		if err != nil {
 			return fmt.Errorf("insert audit: %w", err)
 		}

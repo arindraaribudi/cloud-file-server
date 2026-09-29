@@ -203,21 +203,21 @@ func newReadOnlyFile(r *bytes.Reader, name string, size int64) *readOnlyFile {
 	return &readOnlyFile{r: r, name: name, size: size}
 }
 
-func (f *readOnlyFile) Read(p []byte) (int, error)         { return f.r.Read(p) }
-func (f *readOnlyFile) ReadAt(p []byte, off int64) (int, error) { return f.r.ReadAt(p, off) }
+func (f *readOnlyFile) Read(p []byte) (int, error)                { return f.r.Read(p) }
+func (f *readOnlyFile) ReadAt(p []byte, off int64) (int, error)   { return f.r.ReadAt(p, off) }
 func (f *readOnlyFile) Seek(off int64, whence int) (int64, error) { return f.r.Seek(off, whence) }
-func (f *readOnlyFile) Close() error                       { f.closed = true; return nil }
-func (f *readOnlyFile) Name() string                       { return f.name }
+func (f *readOnlyFile) Close() error                              { f.closed = true; return nil }
+func (f *readOnlyFile) Name() string                              { return f.name }
 func (f *readOnlyFile) Stat() (os.FileInfo, error) {
 	return &fileInfo{name: f.name, size: f.size, mode: 0o644}, nil
 }
-func (f *readOnlyFile) Sync() error                          { return nil }
-func (f *readOnlyFile) Truncate(size int64) error            { return os.ErrInvalid }
+func (f *readOnlyFile) Sync() error                              { return nil }
+func (f *readOnlyFile) Truncate(size int64) error                { return os.ErrInvalid }
 func (f *readOnlyFile) Readdir(count int) ([]os.FileInfo, error) { return nil, nil }
-func (f *readOnlyFile) Readdirnames(n int) ([]string, error) { return nil, nil }
-func (f *readOnlyFile) Write(p []byte) (int, error)         { return 0, os.ErrInvalid }
+func (f *readOnlyFile) Readdirnames(n int) ([]string, error)     { return nil, nil }
+func (f *readOnlyFile) Write(p []byte) (int, error)              { return 0, os.ErrInvalid }
 func (f *readOnlyFile) WriteAt(p []byte, off int64) (int, error) { return 0, os.ErrInvalid }
-func (f *readOnlyFile) WriteString(s string) (int, error)   { return 0, os.ErrInvalid }
+func (f *readOnlyFile) WriteString(s string) (int, error)        { return 0, os.ErrInvalid }
 
 // memWriteFile is a tiny in-memory buffer that flushes to COS on Close.
 type memWriteFile struct {
@@ -231,7 +231,7 @@ func (m *memWriteFile) Read(p []byte) (int, error) { return 0, os.ErrInvalid }
 func (m *memWriteFile) ReadAt(p []byte, off int64) (int, error) {
 	return bytes.NewReader(m.buf.Bytes()).ReadAt(p, off)
 }
-func (m *memWriteFile) Write(p []byte) (int, error)  { return m.buf.Write(p) }
+func (m *memWriteFile) Write(p []byte) (int, error) { return m.buf.Write(p) }
 func (m *memWriteFile) WriteAt(p []byte, off int64) (int, error) {
 	if off != int64(m.buf.Len()) {
 		return 0, os.ErrInvalid
@@ -259,4 +259,4 @@ func (m *memWriteFile) Truncate(size int64) error {
 	return nil
 }
 func (m *memWriteFile) Readdir(count int) ([]os.FileInfo, error) { return nil, nil }
-func (m *memWriteFile) Readdirnames(count int) ([]string, error)  { return nil, nil }
+func (m *memWriteFile) Readdirnames(count int) ([]string, error) { return nil, nil }

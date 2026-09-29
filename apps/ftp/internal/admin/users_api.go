@@ -73,15 +73,15 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		sftpEnabled = *body.SFTPEnabled
 	}
 	u := &db.FTPUser{
-		Username:    body.Username,
+		Username:     body.Username,
 		PasswordHash: hash,
-		RootFolder:  body.RootFolder,
-		COSBucket:   a.COSBucket,
-		COSRegion:   a.COSRegion,
-		Enabled:     body.Enabled,
-		MaxSessions: 5,
-		FTPEnabled:  ftpEnabled,
-		SFTPEnabled: sftpEnabled,
+		RootFolder:   body.RootFolder,
+		COSBucket:    a.COSBucket,
+		COSRegion:    a.COSRegion,
+		Enabled:      body.Enabled,
+		MaxSessions:  5,
+		FTPEnabled:   ftpEnabled,
+		SFTPEnabled:  sftpEnabled,
 	}
 	if _, err := db.CreateFTPUser(r.Context(), a.Pool, u); err != nil {
 		var pgErr *pgconn.PgError

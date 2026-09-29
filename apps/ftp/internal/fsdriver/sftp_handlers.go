@@ -70,7 +70,21 @@ func (h *SFTPHandlers) Filecmd(r *sftp.Request) error {
 func (h *SFTPHandlers) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
 	switch r.Method {
 	case "List":
-		infos, err := afero.ReadDir(h.fs, r.Filepath)
+		// Prefer the Fs's own ReadDir when one is exposed — listing drivers
+		// that don't route through Open (e.g. COS, which lists by prefix
+		// instead of opening a virtual directory) are called directly.
+		// Mirrors AuditFS.ReadDir so FTP and SFTP show identical listings.
+		var (
+			infos []os.FileInfo
+			err   error
+		)
+		if lister, ok := h.fs.(interface {
+			ReadDir(string) ([]os.FileInfo, error)
+		}); ok {
+			infos, err = lister.ReadDir(r.Filepath)
+		} else {
+			infos, err = afero.ReadDir(h.fs, r.Filepath)
+		}
 		if err != nil {
 			return nil, err
 		}

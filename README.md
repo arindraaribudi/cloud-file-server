@@ -20,8 +20,97 @@ End users upload and download files against a Tencent COS bucket using FTP/FTPS 
 ### SFTP
 - Companion SSH file-transfer server (`go-sftp`) on `:2222`, gated by `SFTP_ENABLED=true`.
 - Two auth modes: password (same bcrypt creds as FTP) and SSH public key (stored per user).
-- Host key from `SFTP_HOST_KEY` (base64-ed25519) or auto-generated on first boot.
+- Host key from `SFTP_HOST_KEY` (base64-encoded PEM private key) or auto-generated on first boot.
 - Public keys managed via `POST /api/v1/users/{username}/sftp-key` or the `/users/:username/sftp-key` UI page.
+
+### SFTP host key
+
+The SFTP server's identity is its SSH host key. Every time the server starts with no
+host key configured, it generates an ephemeral ed25519 key — clients see a new
+fingerprint on every restart and reject the connection (`REMOTE HOST KEY HAS
+CHANGED`). Pin a stable key via the `SFTP_HOST_KEY` env var so the fingerprint
+stays constant across pod restarts.
+
+The value is a base64-encoded PEM private key (RSA, ECDSA, or ed25519). The server
+base64-decodes it, parses the key block, and uses it as the SSH host identity.
+
+#### 1. Generate a key (once, on an operator machine)
+
+```sh
+# ed25519 (smallest, fastest, fine for SSH host keys)
+ssh-keygen -t ed25519 -f sftp_host_ed25519 -N ""
+```
+
+This produces `sftp_host_ed25519` (private key) and `sftp_host_ed25519.pub` (public
+key, for client pinning).
+
+#### 2. Base64-encode the private key
+
+```sh
+# Linux / macOS — single-line base64, no line wraps
+base64 -w0 sftp_host_ed25519    # GNU coreutils
+base64 -i sftp_host_ed25519     # BSD / macOS without -w
+
+# Sanity check: decode back and diff against the source file
+base64 -d <<<"<paste-the-base64-here>" > /tmp/decoded.pem
+diff sftp_host_ed25519 /tmp/decoded.pem && echo OK
+```
+
+#### 3. Store in a Kubernetes Secret
+
+```sh
+kubectl -n ftp create secret generic sftp-hostkey \
+  --from-literal=SFTP_HOST_KEY="$(base64 -w0 sftp_host_ed25519)"
+```
+
+Wire it into the Deployment:
+
+```yaml
+env:
+  - name: SFTP_HOST_KEY
+    valueFrom:
+      secretKeyRef:
+        name: sftp-hostkey
+        key: SFTP_HOST_KEY
+```
+
+Or, for local dev, put the base64 string straight in `.env`:
+
+```
+SFTP_HOST_KEY=LS0tLS1CRUdJTi...==
+```
+
+#### 4. Pin the fingerprint on clients
+
+After the first deploy, every client must trust the key. Pull the public half and
+add it to `known_hosts` (preferred — no prompt ever):
+
+```sh
+ssh-keyscan -p 2222 sftp.example.com >> ~/.ssh/known_hosts
+```
+
+Or pin via `~/.ssh/config` with the host key blob you already have:
+
+```
+Host sftp.example.com
+  HostName sftp.example.com
+  Port 2222
+  StrictHostKeyChecking yes
+  IdentityFile ~/.ssh/my_client_key
+```
+
+The server logs the SHA-256 fingerprint on startup when a key is loaded; check it
+matches what your operators expect.
+
+#### Caveats
+
+- **Key lives in a Kubernetes Secret, not in the image.** Rotating means
+  regenerating the keypair, re-uploading the Secret, and updating every client's
+  `known_hosts` (one prompt per client on first reconnect).
+- **Empty `SFTP_HOST_KEY` = ephemeral key.** The server logs a warning at startup
+  so this is impossible to miss in CI.
+- **One key per environment.** Don't share a dev key with staging or production —
+  fingerprint pinning makes rotation painful across the wrong boundary.
 
 ### Admin file manager
 - Browse any user's COS subtree at `/files/:userId?path=...` (`GET /api/v1/files/{userId}`).

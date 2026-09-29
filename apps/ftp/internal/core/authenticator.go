@@ -28,12 +28,13 @@ type DBAuthenticator struct {
 
 var _ Authenticator = (*DBAuthenticator)(nil)
 
-func (a *DBAuthenticator) Authenticate(user, pass string, clientIP net.IP) (*db.FTPUser, error) {
+func (a *DBAuthenticator) Authenticate(user, pass, connectionType string, clientIP net.IP) (*db.FTPUser, error) {
 	ctx := context.Background()
 	if !a.Lockout.Allow(user) {
 		a.Audit.Log(audit.Event{
 			Username: user, ClientIP: clientIP, Action: "LOGIN", Success: false,
-			Detail: map[string]any{"reason": "locked_out"},
+			ConnectionType: connectionType,
+			Detail:         map[string]any{"reason": "locked_out"},
 		})
 		return nil, errAuthFailed
 	}
@@ -44,14 +45,16 @@ func (a *DBAuthenticator) Authenticate(user, pass string, clientIP net.IP) (*db.
 		a.Lockout.RecordFailure(user)
 		a.Audit.Log(audit.Event{
 			Username: user, ClientIP: clientIP, Action: "LOGIN", Success: false,
-			Detail: map[string]any{"reason": "db_error", "err": err.Error()},
+			ConnectionType: connectionType,
+			Detail:         map[string]any{"reason": "db_error", "err": err.Error()},
 		})
 		return nil, errAuthFailed
 	}
 	if !u.Enabled {
 		a.Audit.Log(audit.Event{
 			Username: user, ClientIP: clientIP, Action: "LOGIN", Success: false,
-			Detail: map[string]any{"reason": "disabled"},
+			ConnectionType: connectionType,
+			Detail:         map[string]any{"reason": "disabled"},
 		})
 		return nil, errAuthFailed
 	}
@@ -59,7 +62,8 @@ func (a *DBAuthenticator) Authenticate(user, pass string, clientIP net.IP) (*db.
 		a.Lockout.RecordFailure(user)
 		a.Audit.Log(audit.Event{
 			Username: user, ClientIP: clientIP, Action: "LOGIN", Success: false,
-			Detail: map[string]any{"reason": "bad_password"},
+			ConnectionType: connectionType,
+			Detail:         map[string]any{"reason": "bad_password"},
 		})
 		return nil, errAuthFailed
 	}
@@ -67,11 +71,13 @@ func (a *DBAuthenticator) Authenticate(user, pass string, clientIP net.IP) (*db.
 	if err := db.SetFTPUserLastLogin(dbCtx, a.Pool, u.ID); err != nil {
 		a.Audit.Log(audit.Event{
 			Username: user, ClientIP: clientIP, Action: "LOGIN", Success: false,
-			Detail: map[string]any{"reason": "last_login_update_failed", "err": err.Error()},
+			ConnectionType: connectionType,
+			Detail:         map[string]any{"reason": "last_login_update_failed", "err": err.Error()},
 		})
 	}
 	a.Audit.Log(audit.Event{
 		Username: user, ClientIP: clientIP, Action: "LOGIN", Success: true,
+		ConnectionType: connectionType,
 	})
 	return u, nil
 }

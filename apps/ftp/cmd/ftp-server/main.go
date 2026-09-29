@@ -15,7 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	ftpserverlib "github.com/fclairamb/ftpserverlib"
 	"github.com/example/cos-ftp-server/internal/admin"
 	"github.com/example/cos-ftp-server/internal/audit"
 	"github.com/example/cos-ftp-server/internal/auth"
@@ -26,8 +25,8 @@ import (
 	"github.com/example/cos-ftp-server/internal/fsdriver"
 	"github.com/example/cos-ftp-server/internal/ftpserver"
 	"github.com/example/cos-ftp-server/internal/sftpserver"
+	ftpserverlib "github.com/fclairamb/ftpserverlib"
 )
-
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -108,23 +107,28 @@ func run(ctx context.Context, log *slog.Logger) error {
 			if err != nil {
 				return nil, fmt.Errorf("mount: %w", err)
 			}
-			log.Info("ftp: user connected", "username", u.Username, "client_ip", clientIP, "bucket", cfg.COSBucket, "region", cfg.COSRegion, "root_prefix", u.RootFolder)
+			backend := storage.BackendLocation()
+			log.Info("ftp: user connected", "username", u.Username, "client_ip", clientIP, "backend", backend, "root_prefix", u.RootFolder)
 			auditLog.Log(audit.Event{
-				Username: u.Username,
-				ClientIP: net.ParseIP(clientIP),
-				Action:   "LOGIN",
-				Success:  true,
-				Detail:   map[string]any{"bucket": cfg.COSBucket, "region": cfg.COSRegion, "root_prefix": u.RootFolder},
+				Username:        u.Username,
+				ClientIP:        net.ParseIP(clientIP),
+				Action:          "LOGIN",
+				Success:         true,
+				ConnectionType:  "ftp",
+				BackendLocation: backend,
+				RootFolder:      u.RootFolder,
+				Detail:          map[string]any{"backend": backend, "root_prefix": u.RootFolder},
 			})
-			return fsdriver.NewAuditFS(fs, auditLog, u.Username, net.ParseIP(clientIP)), nil
+			return fsdriver.NewAuditFS(fs, auditLog, u.Username, net.ParseIP(clientIP), "ftp", backend, u.RootFolder), nil
 		},
 		Authenticator: &core.DBAuthenticator{
 			Pool:    pool,
 			Lockout: auth.NewLockout(cfg.AuthLockoutLimit, cfg.AuthLockoutWindow),
 			Audit:   auditLog,
 		},
-		Audit:  auditLog,
-		Logger: log,
+		Audit:           auditLog,
+		Logger:          log,
+		BackendLocation: storage.BackendLocation(),
 	}
 	if cfg.FTPTLSCert != "" && cfg.FTPTLSKey != "" {
 		srv.TLS = &ftpserver.TLSConfig{

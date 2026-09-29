@@ -17,7 +17,7 @@ type fakeAuthenticator struct {
 	err  error
 }
 
-func (f *fakeAuthenticator) Authenticate(user, pass string, _ net.IP) (*db.FTPUser, error) {
+func (f *fakeAuthenticator) Authenticate(user, pass, _ string, _ net.IP) (*db.FTPUser, error) {
 	return f.user, f.err
 }
 
@@ -27,8 +27,10 @@ func (f fakeConnMetadata) User() string          { return f.user }
 func (f fakeConnMetadata) SessionID() []byte     { return nil }
 func (f fakeConnMetadata) ClientVersion() []byte { return nil }
 func (f fakeConnMetadata) ServerVersion() []byte { return nil }
-func (f fakeConnMetadata) RemoteAddr() net.Addr  { return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0} }
-func (f fakeConnMetadata) LocalAddr() net.Addr   { return nil }
+func (f fakeConnMetadata) RemoteAddr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}
+}
+func (f fakeConnMetadata) LocalAddr() net.Addr { return nil }
 
 func TestPasswordCallback_Allows(t *testing.T) {
 	s := &Server{

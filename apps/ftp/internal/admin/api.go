@@ -17,21 +17,21 @@ import (
 )
 
 type API struct {
-	Pool               *pgxpool.Pool
-	Sessions           *SessionManager
-	Audit              *audit.Logger
-	COSBucket          string
-	COSRegion          string
-	COSClient          *cos.Client
-	Storage            core.ObjectStorage
-	DefaultRootPrefix  string
-	FTPEnabled         bool
-	FTPAddress         string
-	FTPPublicAddress   string
-	SFTPEnabled        bool
-	SFTPAddress        string
-	SFTPPublicAddress  string
-	oidc               *oidcAuth
+	Pool              *pgxpool.Pool
+	Sessions          *SessionManager
+	Audit             *audit.Logger
+	COSBucket         string
+	COSRegion         string
+	COSClient         *cos.Client
+	Storage           core.ObjectStorage
+	DefaultRootPrefix string
+	FTPEnabled        bool
+	FTPAddress        string
+	FTPPublicAddress  string
+	SFTPEnabled       bool
+	SFTPAddress       string
+	SFTPPublicAddress string
+	oidc              *oidcAuth
 }
 
 // New wires the admin API. cosBucket/cosRegion are the storage location

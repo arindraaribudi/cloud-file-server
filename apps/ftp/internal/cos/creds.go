@@ -58,10 +58,11 @@ func newChain(sts stsClient, st stsClient, usePod bool, refreshRatio float64) *C
 // identity becomes the only source and must be available at boot.
 //
 // Boot-fail matrix:
-//   TKE_WEB_IDENTITY_TOKEN_FILE set, static present        → ok (STS primary, static fallback)
-//   TKE_WEB_IDENTITY_TOKEN_FILE set, static empty          → ok (pod identity only)
-//   TKE_WEB_IDENTITY_TOKEN_FILE unset, static present      → ok (static only)
-//   TKE_WEB_IDENTITY_TOKEN_FILE unset, static empty        → fail
+//
+//	TKE_WEB_IDENTITY_TOKEN_FILE set, static present        → ok (STS primary, static fallback)
+//	TKE_WEB_IDENTITY_TOKEN_FILE set, static empty          → ok (pod identity only)
+//	TKE_WEB_IDENTITY_TOKEN_FILE unset, static present      → ok (static only)
+//	TKE_WEB_IDENTITY_TOKEN_FILE unset, static empty        → fail
 func NewChainFromEnv(ctx context.Context, id, key, token string, refreshRatio float64) (*Chain, error) {
 	staticAvailable := id != "" && key != ""
 	usePodIdentity := HasTKEPodIdentity()

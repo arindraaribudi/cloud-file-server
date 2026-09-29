@@ -45,6 +45,9 @@ export type AuditEvent = {
   client_ip: string;
   action: string;
   event_type: string;
+  connection_type: string;
+  backend_location: string;
+  root_folder: string;
   path: string;
   success: boolean;
 };

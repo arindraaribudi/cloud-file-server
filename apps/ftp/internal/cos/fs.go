@@ -21,10 +21,16 @@ type Entry struct {
 func parseTime(s string) time.Time {
 	for _, layout := range []string{time.RFC1123, time.RFC1123Z, "2006-01-02T15:04:05.000Z", "2006-01-02T15:04:05Z"} {
 		if t, err := time.Parse(layout, s); err == nil {
+			// COS 0-byte placeholders come back with "0001-01-01T00:00:00.000Z"
+			// — parses fine but is year 1. FileZilla's "filter invalid dates"
+			// hides anything before 1980. Substitute now() so the dir is shown.
+			if t.Year() < 1980 {
+				return time.Now()
+			}
 			return t
 		}
 	}
-	return time.Time{}
+	return time.Now()
 }
 
 func (c *Client) List(ctx context.Context, prefix string) ([]Entry, error) {
@@ -44,12 +50,38 @@ func (c *Client) List(ctx context.Context, prefix string) ([]Entry, error) {
 		return nil, err
 	}
 	out := make([]Entry, 0)
+	seenDirs := make(map[string]struct{})
 	for _, p := range res.CommonPrefixes {
-		out = append(out, Entry{Name: strings.TrimPrefix(p, prefix), IsDir: true})
+		name := strings.TrimSuffix(strings.TrimPrefix(p, prefix), "/")
+		if name == "" {
+			continue
+		}
+		seenDirs[name] = struct{}{}
+		// CommonPrefixes carries no object metadata (no LastModified) — COS
+		// only returns the prefix string. Zero-value ModifyTime renders as
+		// year 1, which FileZilla's LIST view filters out entirely. Same
+		// fix as the Contents/placeholder branch below: substitute now().
+		out = append(out, Entry{Name: name, IsDir: true, ModifyTime: time.Now()})
 	}
 	for _, o := range res.Contents {
 		name := strings.TrimPrefix(o.Key, prefix)
 		if name == "" {
+			continue
+		}
+		// Empty-folder placeholders (created by Mkdir) show up in Contents
+		// with a trailing "/" when there is nothing deeper — CommonPrefixes
+		// only fires for prefixes with at least one grandchild key. Promote
+		// them to directories and dedupe against CommonPrefixes.
+		if strings.HasSuffix(name, "/") {
+			dirName := strings.TrimSuffix(name, "/")
+			if dirName == "" {
+				continue
+			}
+			if _, dup := seenDirs[dirName]; dup {
+				continue
+			}
+			seenDirs[dirName] = struct{}{}
+			out = append(out, Entry{Name: dirName, Size: o.Size, ModifyTime: parseTime(o.LastModified), IsDir: true})
 			continue
 		}
 		out = append(out, Entry{Name: name, Size: o.Size, ModifyTime: parseTime(o.LastModified)})

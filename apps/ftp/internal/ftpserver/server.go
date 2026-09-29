@@ -21,6 +21,10 @@ import (
 	"github.com/example/cos-ftp-server/internal/db"
 )
 
+// ConnType is the value stamped on every audit event this touchpoint emits.
+// Owns its own protocol name — audit is a sink, it doesn't define the set.
+const ConnType = "ftp"
+
 type TLSConfig struct {
 	CertFile string
 	KeyFile  string
@@ -46,12 +50,16 @@ type Server struct {
 	// to prepend a PROXY protocol header on every conn it forwards — control
 	// and each passive data conn alike, since TCPRoute opens a fresh backend
 	// conn per client conn. Without it ClientContext sees Envoy's pod IP.
-	ProxyProtocol    bool
-	TLS              *TLSConfig
-	NewDriver        func(u *db.FTPUser, clientIP string) (ftpserver.ClientDriver, error) // builds the per-user root/bucket driver
-	Authenticator    core.Authenticator
-	Audit            *audit.Logger
-	Logger           *slog.Logger
+	ProxyProtocol bool
+	TLS           *TLSConfig
+	NewDriver     func(u *db.FTPUser, clientIP string) (ftpserver.ClientDriver, error) // builds the per-user root/bucket driver
+	Authenticator core.Authenticator
+	Audit         *audit.Logger
+	Logger        *slog.Logger
+	// BackendLocation is the storage-backend URL emitted on every LOGOUT
+	// event (set by main after the storage plugin has its bucket/region
+	// ready). Same value as core.ObjectStorage.BackendLocation().
+	BackendLocation string
 
 	srv     *ftpserver.FtpServer
 	serveWG sync.WaitGroup // tracks the Serve goroutine so Stop can drain it
@@ -127,12 +135,23 @@ func (s *Server) ClientConnected(ftpserver.ClientContext) (string, error) {
 }
 
 // ClientDisconnected fires on every disconnect, authenticated or not. Only
-// authenticated sessions (username stashed in AuthUser via cc.SetExtra) get
+// authenticated sessions (identity stashed in AuthUser via cc.SetExtra) get
 // a LOGOUT audit event.
 func (s *Server) ClientDisconnected(cc ftpserver.ClientContext) {
-	if username, ok := cc.Extra().(string); ok && username != "" {
-		s.Audit.Log(audit.Event{Username: username, ClientIP: clientIPFromAddr(cc.RemoteAddr().String()), Action: "LOGOUT", Success: true})
+	if id, ok := cc.Extra().(authedSession); ok && id.Username != "" {
+		s.Audit.Log(audit.Event{
+			Username: id.Username, ClientIP: clientIPFromAddr(cc.RemoteAddr().String()),
+			Action: "LOGOUT", Success: true, ConnectionType: ConnType, BackendLocation: s.BackendLocation, RootFolder: id.RootFolder,
+		})
 	}
+}
+
+// authedSession carries the per-connection identity stashed in ClientContext
+// Extra so ClientDisconnected can attribute the LOGOUT event without a
+// second DB lookup.
+type authedSession struct {
+	Username   string
+	RootFolder string
 }
 
 // ftpAccessDenied reports whether u is blocked from the FTP touchpoint
@@ -158,21 +177,22 @@ func (s *Server) AuthUser(cc ftpserver.ClientContext, user, pass string) (ftpser
 		return nil, fmt.Errorf("ftpserver: auth failed for user %q", user)
 	}
 	clientIP := clientIPFromAddr(cc.RemoteAddr().String())
-	u, err := s.Authenticator.Authenticate(user, pass, clientIP)
+	u, err := s.Authenticator.Authenticate(user, pass, ConnType, clientIP)
 	if err != nil {
 		return nil, fmt.Errorf("ftpserver: auth failed for user %q", user)
 	}
 	if ftpAccessDenied(u) {
 		s.Audit.Log(audit.Event{
 			Username: user, ClientIP: clientIP, Action: "LOGIN", Success: false,
-			Detail: map[string]any{"reason": "ftp_disabled"},
+			ConnectionType: ConnType,
+			Detail:         map[string]any{"reason": "ftp_disabled"},
 		})
 		return nil, fmt.Errorf("ftpserver: auth failed for user %q", user)
 	}
 	if s.NewDriver == nil {
 		return nil, fmt.Errorf("ftpserver: no driver factory configured")
 	}
-	cc.SetExtra(u.Username)
+	cc.SetExtra(authedSession{Username: u.Username, RootFolder: u.RootFolder})
 	return s.NewDriver(u, clientIP.String())
 }
 

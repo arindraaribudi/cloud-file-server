@@ -1,0 +1,1 @@
+ALTER TABLE audit_events ALTER COLUMN backend_location TYPE VARCHAR(256);

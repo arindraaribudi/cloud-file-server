@@ -26,7 +26,7 @@ var _ afero.Fs = (*Local)(nil)
 
 // afero.Fs methods ------------------------------------------------
 
-func (l *Local) Name() string { return "Local(" + l.root + ")" }
+func (l *Local) Name() string                         { return "Local(" + l.root + ")" }
 func (l *Local) Open(name string) (afero.File, error) { return l.fs.Open(name) }
 func (l *Local) Create(name string) (afero.File, error) {
 	return l.fs.Create(name)

@@ -18,10 +18,10 @@ type Client struct {
 	Region string
 	Chain  *Chain
 
-	http   *http.Client
-	cos    *cos.Client
-	curr   creds
-	mu     sync.Mutex
+	http *http.Client
+	cos  *cos.Client
+	curr creds
+	mu   sync.Mutex
 }
 
 // NewClient builds a COS client backed by a static credential snapshot. Used by
