@@ -1,15 +1,33 @@
 package fsdriver
 
 import (
+	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/spf13/afero"
 
 	"github.com/example/cos-ftp-server/internal/audit"
+	"github.com/example/cos-ftp-server/internal/fileevents"
 )
+
+// FileEventSink is the durable workflow-event destination. *fileevents.Publisher
+// implements it in production; tests can inject a fake.
+type FileEventSink interface {
+	Publish(ctx context.Context, e fileevents.Event)
+	DetectMIME(fs afero.Fs, name string, size int64) (string, string)
+}
+
+// AuditOptions carries per-connection metadata added after AuditFS existed.
+type AuditOptions struct {
+	UserID int64
+	Events FileEventSink
+}
 
 // AuditFS wraps a per-user ClientDriver so every file command (upload,
 // download, delete, rename, mkdir) is recorded in the audit trail. All
@@ -19,15 +37,24 @@ type AuditFS struct {
 	afero.Fs
 	audit           *audit.Logger
 	username        string
+	userID          int64
 	clientIP        net.IP
 	connectionType  string // "ftp" or "sftp"
 	backendLocation string // "cos" or "local"
 	rootFolder      string
 	session         uuid.UUID
+	events          FileEventSink
 }
 
-func NewAuditFS(fs afero.Fs, log *audit.Logger, username string, clientIP net.IP, connectionType, backendLocation, rootFolder string) *AuditFS {
-	return &AuditFS{Fs: fs, audit: log, username: username, clientIP: clientIP, connectionType: connectionType, backendLocation: backendLocation, rootFolder: rootFolder, session: uuid.New()}
+var errWriteFailed = errors.New("write failed")
+
+func NewAuditFS(fs afero.Fs, log *audit.Logger, username string, clientIP net.IP, connectionType, backendLocation, rootFolder string, opts AuditOptions) *AuditFS {
+	return &AuditFS{
+		Fs: fs, audit: log, username: username, userID: opts.UserID,
+		clientIP: clientIP, connectionType: connectionType,
+		backendLocation: backendLocation, rootFolder: rootFolder,
+		session: uuid.New(), events: opts.Events,
+	}
 }
 
 func (a *AuditFS) log(action, path string, bytes int64, err error) {
@@ -36,6 +63,53 @@ func (a *AuditFS) log(action, path string, bytes int64, err error) {
 		Action: action, Path: path, Bytes: bytes, Success: err == nil,
 		ConnectionType: a.connectionType, BackendLocation: a.backendLocation, RootFolder: a.rootFolder,
 	})
+}
+
+// publish stamps connection metadata onto a file event and hands it to the
+// durable sink. It is a no-op when workflow events are disabled.
+func (a *AuditFS) publish(e fileevents.Event) {
+	if a.events == nil {
+		return
+	}
+	e.EventTime = time.Now().UTC()
+	e.UserID = a.userID
+	e.Username = a.username
+	e.RootFolder = a.rootFolder
+	e.ConnectionType = a.connectionType
+	e.BackendLocation = a.backendLocation
+	e.SessionID = a.session
+	a.events.Publish(context.Background(), e)
+}
+
+func (a *AuditFS) detectMIME(name string, size int64) (string, string) {
+	if a.events != nil {
+		return a.events.DetectMIME(a.Fs, name, size)
+	}
+	return fileevents.DetectMIME(a.Fs, name, size, fileevents.MIMEFallback, fileevents.DefaultMIMESniffMaxBytes)
+}
+
+func (a *AuditFS) publishUpload(name string, size int64, overwrite bool) {
+	if a.events == nil {
+		return
+	}
+	mime, src := a.detectMIME(name, size)
+	a.publish(fileevents.Event{
+		EventType:  fileevents.EventUpload,
+		Path:       eventPath(name),
+		Size:       size,
+		MIME:       mime,
+		MIMESource: src,
+		Overwrite:  overwrite,
+	})
+}
+
+func (a *AuditFS) exists(name string) bool {
+	_, err := a.Fs.Stat(name)
+	return err == nil
+}
+
+func eventPath(name string) string {
+	return strings.TrimPrefix(strings.TrimSpace(name), "/")
 }
 
 func (a *AuditFS) Open(name string) (afero.File, error) {
@@ -56,29 +130,55 @@ func (a *AuditFS) Open(name string) (afero.File, error) {
 		a.log("DOWNLOAD", name, 0, err)
 		return nil, err
 	}
-	return &auditFile{File: f, onClose: func(n int64) { a.log("DOWNLOAD", name, n, nil) }}, nil
+	return &auditFile{File: f, onClose: func(n int64, _ bool) { a.log("DOWNLOAD", name, n, nil) }}, nil
 }
 
 func (a *AuditFS) Create(name string) (afero.File, error) {
+	overwrite := false
+	if a.events != nil {
+		overwrite = a.exists(name)
+	}
 	f, err := a.Fs.Create(name)
 	if err != nil {
 		a.log("UPLOAD", name, 0, err)
 		return nil, err
 	}
-	return &auditFile{File: f, onClose: func(n int64) { a.log("UPLOAD", name, n, nil) }}, nil
+	return &auditFile{File: f, onClose: func(n int64, failed bool) {
+		if failed {
+			a.log("UPLOAD", name, n, errWriteFailed)
+			return
+		}
+		a.log("UPLOAD", name, n, nil)
+		a.publishUpload(name, n, overwrite)
+	}}, nil
 }
 
 func (a *AuditFS) OpenFile(name string, flag int, perm os.FileMode) (afero.File, error) {
-	f, err := a.Fs.OpenFile(name, flag, perm)
 	action := "DOWNLOAD"
 	if flag&(os.O_WRONLY|os.O_RDWR) != 0 {
 		action = "UPLOAD"
 	}
+	overwrite := false
+	if action == "UPLOAD" && a.events != nil {
+		overwrite = a.exists(name)
+	}
+	f, err := a.Fs.OpenFile(name, flag, perm)
 	if err != nil {
 		a.log(action, name, 0, err)
 		return nil, err
 	}
-	return &auditFile{File: f, onClose: func(n int64) { a.log(action, name, n, nil) }}, nil
+	return &auditFile{File: f, onClose: func(n int64, failed bool) {
+		if action == "UPLOAD" {
+			if failed {
+				a.log(action, name, n, errWriteFailed)
+				return
+			}
+			a.log(action, name, n, nil)
+			a.publishUpload(name, n, overwrite)
+			return
+		}
+		a.log(action, name, n, nil)
+	}}, nil
 }
 
 // ReadDir handles the FTP LIST command, logged as its own "LIST" action
@@ -103,20 +203,99 @@ func (a *AuditFS) listDir(name string) ([]os.FileInfo, error) {
 }
 
 func (a *AuditFS) Remove(name string) error {
+	var (
+		isDir bool
+		size  int64
+		mime  string
+		msrc  string
+	)
+	if a.events != nil {
+		if info, statErr := a.Fs.Stat(name); statErr == nil {
+			isDir = info.IsDir()
+			size = info.Size()
+			if !isDir {
+				mime, msrc = a.detectMIME(name, size)
+			}
+		}
+	}
 	err := a.Fs.Remove(name)
 	a.log("DELETE", name, 0, err)
+	if err == nil {
+		a.publish(fileevents.Event{
+			EventType:  fileevents.EventRemove,
+			Path:       eventPath(name),
+			IsDir:      isDir,
+			Size:       size,
+			MIME:       mime,
+			MIMESource: msrc,
+		})
+	}
 	return err
 }
 
-func (a *AuditFS) RemoveAll(path string) error {
-	err := a.Fs.RemoveAll(path)
-	a.log("DELETE", path, 0, err)
+func (a *AuditFS) RemoveAll(name string) error {
+	var (
+		isDir bool
+		size  int64
+		mime  string
+		msrc  string
+	)
+	if a.events != nil {
+		if info, statErr := a.Fs.Stat(name); statErr == nil {
+			isDir = info.IsDir()
+			size = info.Size()
+			if !isDir {
+				mime, msrc = a.detectMIME(name, size)
+			}
+		}
+	}
+	err := a.Fs.RemoveAll(name)
+	a.log("DELETE", name, 0, err)
+	if err == nil {
+		a.publish(fileevents.Event{
+			EventType:  fileevents.EventRemove,
+			Path:       eventPath(name),
+			IsDir:      isDir,
+			Size:       size,
+			MIME:       mime,
+			MIMESource: msrc,
+		})
+	}
 	return err
 }
 
 func (a *AuditFS) Rename(oldname, newname string) error {
+	var (
+		isDir     bool
+		size      int64
+		mime      string
+		msrc      string
+		overwrite bool
+	)
+	if a.events != nil {
+		if info, statErr := a.Fs.Stat(oldname); statErr == nil {
+			isDir = info.IsDir()
+			size = info.Size()
+			if !isDir {
+				mime, msrc = a.detectMIME(oldname, size)
+			}
+		}
+		overwrite = a.exists(newname)
+	}
 	err := a.Fs.Rename(oldname, newname)
 	a.log("RENAME", oldname+" -> "+newname, 0, err)
+	if err == nil {
+		a.publish(fileevents.Event{
+			EventType:  fileevents.EventRename,
+			Path:       eventPath(newname),
+			OldPath:    eventPath(oldname),
+			IsDir:      isDir,
+			Size:       size,
+			MIME:       mime,
+			MIMESource: msrc,
+			Overwrite:  overwrite,
+		})
+	}
 	return err
 }
 
@@ -137,7 +316,8 @@ func (a *AuditFS) MkdirAll(path string, perm os.FileMode) error {
 type auditFile struct {
 	afero.File
 	n       int64
-	onClose func(bytes int64)
+	failed  bool
+	onClose func(bytes int64, failed bool)
 	closed  bool
 }
 
@@ -150,6 +330,9 @@ func (f *auditFile) Read(p []byte) (int, error) {
 func (f *auditFile) Write(p []byte) (int, error) {
 	n, err := f.File.Write(p)
 	f.n += int64(n)
+	if err != nil {
+		f.failed = true
+	}
 	return n, err
 }
 
@@ -157,7 +340,9 @@ func (f *auditFile) Close() error {
 	err := f.File.Close()
 	if !f.closed {
 		f.closed = true
-		f.onClose(f.n)
+		if f.onClose != nil {
+			f.onClose(f.n, f.failed || err != nil)
+		}
 	}
 	return err
 }
@@ -175,15 +360,15 @@ type dirFile struct {
 	closed  bool
 }
 
-func (d *dirFile) Read([]byte) (int, error)                { return 0, io.EOF }
-func (d *dirFile) ReadAt([]byte, int64) (int, error)       { return 0, io.EOF }
-func (d *dirFile) Seek(int64, int) (int64, error)          { return 0, nil }
-func (d *dirFile) Close() error                            { d.closed = true; return nil }
-func (d *dirFile) Sync() error                             { return nil }
-func (d *dirFile) Truncate(int64) error                    { return os.ErrInvalid }
-func (d *dirFile) Write([]byte) (int, error)               { return 0, os.ErrInvalid }
-func (d *dirFile) WriteAt([]byte, int64) (int, error)      { return 0, os.ErrInvalid }
-func (d *dirFile) WriteString(string) (int, error)         { return 0, os.ErrInvalid }
+func (d *dirFile) Read([]byte) (int, error)           { return 0, io.EOF }
+func (d *dirFile) ReadAt([]byte, int64) (int, error)  { return 0, io.EOF }
+func (d *dirFile) Seek(int64, int) (int64, error)     { return 0, nil }
+func (d *dirFile) Close() error                       { d.closed = true; return nil }
+func (d *dirFile) Sync() error                        { return nil }
+func (d *dirFile) Truncate(int64) error               { return os.ErrInvalid }
+func (d *dirFile) Write([]byte) (int, error)          { return 0, os.ErrInvalid }
+func (d *dirFile) WriteAt([]byte, int64) (int, error) { return 0, os.ErrInvalid }
+func (d *dirFile) WriteString(string) (int, error)    { return 0, os.ErrInvalid }
 
 func (d *dirFile) Name() string { return d.name }
 

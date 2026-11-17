@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/example/cos-ftp-server/internal/audit"
+	"github.com/example/cos-ftp-server/internal/auth"
 	"github.com/example/cos-ftp-server/internal/core"
 	"github.com/example/cos-ftp-server/internal/cos"
 	"github.com/example/cos-ftp-server/internal/db"
@@ -17,33 +18,37 @@ import (
 )
 
 type API struct {
-	Pool              *pgxpool.Pool
-	Sessions          *SessionManager
-	Audit             *audit.Logger
-	COSBucket         string
-	COSRegion         string
-	COSClient         *cos.Client
-	Storage           core.ObjectStorage
-	DefaultRootPrefix string
-	FTPEnabled        bool
-	FTPAddress        string
-	FTPPublicAddress  string
-	SFTPEnabled       bool
-	SFTPAddress       string
-	SFTPPublicAddress string
-	oidc              *oidcAuth
+	Pool                 *pgxpool.Pool
+	Sessions             *SessionManager
+	Audit                *audit.Logger
+	COSBucket            string
+	COSRegion            string
+	COSClient            *cos.Client
+	Storage              core.UserStorage
+	DefaultRootPrefix    string
+	WorkflowAPIURL       string
+	WorkflowServiceToken string
+	LocalLogin           bool
+	LoginLockout         *auth.Lockout
+	FTPEnabled           bool
+	FTPAddress           string
+	FTPPublicAddress     string
+	SFTPEnabled          bool
+	SFTPAddress          string
+	SFTPPublicAddress    string
+	oidc                 *oidcAuth
 }
 
 // New wires the admin API. cosBucket/cosRegion are the storage location
 // assigned to newly provisioned FTP users (per-user bucket selection is not
 // yet implemented — see main.go's M2 wiring note). cosClient is used to create
 // each new user's root folder placeholder; pass nil to skip (e.g. in tests).
-// storage backs the file browse/download endpoints (userFsFor) and is
-// backend-agnostic; pass nil to disable file browsing (e.g. in tests using
+// storage routes each user to their own backend (cos/local) and backs the file
+// browse/download endpoints (userFsFor); pass nil to disable file browsing (e.g. in tests using
 // memFsForTest). defaultRootPrefix is the bucket-relative prefix the
 // folder-suggestion endpoint lists from (e.g. "/t/t/"). Call ConfigureOIDC
 // afterwards to enable SSO login.
-func New(pool *pgxpool.Pool, cookieSecure bool, cosBucket, cosRegion string, cosClient *cos.Client, storage core.ObjectStorage, defaultRootPrefix string, auditLog *audit.Logger) *API {
+func New(pool *pgxpool.Pool, cookieSecure bool, cosBucket, cosRegion string, cosClient *cos.Client, storage core.UserStorage, defaultRootPrefix string, auditLog *audit.Logger) *API {
 	if defaultRootPrefix == "" {
 		defaultRootPrefix = "/t/t/"
 	}
@@ -56,13 +61,17 @@ func New(pool *pgxpool.Pool, cookieSecure bool, cosBucket, cosRegion string, cos
 		COSClient:         cosClient,
 		Storage:           storage,
 		DefaultRootPrefix: defaultRootPrefix,
+		LoginLockout:      auth.NewLockout(5, 15*time.Minute),
 	}
 }
 
 func (a *API) Routes() http.Handler {
 	r := chi.NewRouter()
 	r.Method("GET", "/metrics", telemetry.Handler())
+	a.internalFileRoutes(r)
 	r.Post("/api/v1/auth/logout", a.logout)
+	r.Get("/api/v1/auth/config", a.authConfig)
+	r.Post("/api/v1/auth/login", a.localLogin)
 	r.Get("/api/v1/auth/oidc/authorize", a.oidcAuthorize)
 	r.Get(oidcCallbackPath, a.oidcCallback)
 
@@ -83,8 +92,15 @@ func (a *API) Routes() http.Handler {
 			r.Post("/api/v1/users/{username}/password", a.resetUserPassword)
 			r.Post("/api/v1/users/{username}/sftp-key", a.setUserSFTPKey)
 			r.Delete("/api/v1/users/{username}", a.deleteUser)
+
+			r.Get("/api/v1/admins", a.listAdminUsers)
+			r.Post("/api/v1/admins", a.createAdminUser)
+			r.Patch("/api/v1/admins/{username}", a.updateAdminUser)
+			r.Post("/api/v1/admins/{username}/password", a.resetAdminPassword)
+			r.Delete("/api/v1/admins/{username}", a.deleteAdminUser)
 		})
 	})
+	a.workflowRoutes(r)
 	return r
 }
 
@@ -99,6 +115,9 @@ func (a *API) listUsers(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
+	}
+	for _, u := range users {
+		a.resolveBackend(u)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(users)

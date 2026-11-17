@@ -8,6 +8,7 @@ End users upload and download files against a Tencent COS bucket using FTP/FTPS 
 |---|---|---|
 | `apps/ftp` | Go 1.26, ftpserverlib, go-sftp, pgx, afero, COS SDK | FTP `:2121` + SFTP `:2222` + admin `:8080` |
 | `apps/web` | Bun 1.4 + React 19 + TanStack Router/Query/Table + Vite | `:9001` (static + reverse proxy `/api/*` → `:8080`) |
+| `apps/workflow` | Go 1.26 + chi + pgx + component registry/engine | `:8081` (internal, proxied through the admin API) |
 
 ## Features
 
@@ -112,10 +113,23 @@ matches what your operators expect.
 - **One key per environment.** Don't share a dev key with staging or production —
   fingerprint pinning makes rotation painful across the wrong boundary.
 
+### Per-user storage backend
+- Each user is stored on either **Tencent COS** or **local disk**, chosen in the *Storage* field when the user is created. It is shown in the users table and **cannot be changed afterwards** (that would orphan the user's files).
+- `STORAGE_ENABLED_BACKENDS` (`cos`, `local`, or `cos,local`) lists what admins can pick; `STORAGE_BACKEND` is the default for users that don't choose. Setting neither keeps the previous single-backend behaviour, and users created before this feature follow `STORAGE_BACKEND`.
+- Local users live under `STORAGE_LOCAL_ROOT/<root_folder>`; in Kubernetes that path needs a persistent volume, and with several replicas a shared (ReadWriteMany) one.
+- Workflow copies between two users on *different* backends are streamed through the server with a size cap rather than copied server-side; see [docs/cross-backend-copy.md](docs/cross-backend-copy.md).
+
 ### Admin file manager
 - Browse any user's COS subtree at `/files/:userId?path=...` (`GET /api/v1/files/{userId}`).
 - Breadcrumb nav across virtual folders; download via signed link (`GET /api/v1/files/{userId}/download?path=...`).
 - Powered by the same COS driver the FTP/SFTP servers use — what admins see is what users see.
+
+### Local administrators
+- `/admins` lists and manages **local credential** admin accounts (separate from FTP users).
+- Create an admin, choose `admin` or `readonly`, reset its password, or delete it.
+- The server prevents deleting your own account, demoting yourself, and removing the last admin.
+- SSO administrators are not stored in `admin_users`; they are managed by the IdP/group mapping.
+- Local password login is controlled by `ADMIN_LOCAL_LOGIN` (Compose enables it and seeds `localadmin`).
 
 ### Password reset
 - Admin triggers reset at `POST /api/v1/users/{username}/password` (UI: `/users/:username/password`).
@@ -132,7 +146,24 @@ matches what your operators expect.
 - Every FTP/SFTP login, command, file op, admin action (create/update/delete/reset/key change), and OIDC login is captured with actor IP, target, outcome.
 - Browse at `/audit` (`GET /api/v1/audit`) with filters: actor, action type, date range.
 - Export to CSV via `GET /api/v1/audit/export`.
+- Admin account changes (`ADMIN_CREATE_ADMIN`, `ADMIN_UPDATE_ADMIN`, `ADMIN_RESET_ADMIN_PASSWORD`, `ADMIN_DELETE_ADMIN`) are recorded.
 - Retention policy in `audit/retention.go` (env-tunable); `apps/ftp/docs/runbook.md` covers archival/cleanup.
+
+### Workflow automation
+- New `apps/workflow` Go service owns a component registry and a sequential execution engine.
+- The file server publishes durable upload/remove events to `file_events`; the workflow service claims them with `FOR UPDATE SKIP LOCKED`.
+- A workflow is a set of component instances assigned to **trigger**, **process**, or **output**:
+  - triggers: `trigger.file.upload`, `trigger.file.remove` with path regex + MIME filters;
+  - process: `process.file.rename`, `process.file.remove`, `process.condition`;
+  - output: `output.file.copy`, `output.notify.webhook`, `output.notify.email`.
+- Exactly one trigger component is allowed per workflow. Process and output components run in order.
+- The designer shows the flow as a tree: **Trigger → one or more Condition boxes → actions**. Actions of the same kind sit together in one box ("Copy to folders", "Webhook / API calls", "Email"), so one workflow can copy to folders A/B/C and then call a notification webhook and an API. The grouping is derived from the flat component list; nothing extra is stored.
+- Steps in one action box can run **at the same time** (the box's "Run all steps in this box at the same time" option, on by default for new boxes). Stored as `parallel_group` on adjacent output components with the same value; empty means one by one. A parallel box waits for all its steps: if one fails the others still finish, and on a retryable failure only the failed steps run again. At most 8 steps of a box run at once. Use separate destinations for parallel copies, since two copies to the same path can collide.
+- `output.notify.webhook` takes an HTTP `method` (POST default; PUT, PATCH, DELETE, GET). GET and DELETE send no body.
+- `process.condition` filters on path/MIME. A step belongs to a **route** (`route` on each component; empty is the default route), and a condition that is not met skips only the remaining steps of its own route, so the run still completes successfully and the other routes carry on. The designer shows each route as a **Condition box**: add as many as you need to handle different files differently (e.g. `^invoice_` → copy to folder A and B, `^scan_` → call a webhook). A file is checked against every Condition box, so it can follow more than one route; a box with no filter always runs. Parallel groups (below) never span routes. A route can be **collapsed** to a single node ("Condition: … · 3 steps") with the − / + button on its box, from its editor panel, or with "Collapse all routes"; its steps are kept and still run. Collapsing is a view setting only and is not saved, so a workflow always reopens expanded.
+- The admin UI at `/workflows` uses the `sequential-workflow-designer` canvas with a drag-and-drop toolbox, a schema-driven step editor, and `/workflows/:id/runs` for trigger decisions and per-component results.
+- All `/workflows*` routes are session-guarded in the router. Unauthenticated deep links redirect to `/login`; the workflow proxy API returns `401` without a session.
+- Workflow file operations go through the file server's token-protected internal API, so path validation, audit, and storage semantics stay in one place. Runs can be retried, canceled, or dry-run without side effects.
 
 The Bun server is a thin shim: it serves the SPA bundle and forwards `/api/*` to the Go admin API. All business logic lives in Go.
 
@@ -159,12 +190,22 @@ apps/
   web/
     server.js              Bun static + reverse proxy
     src/
-      components/          Stamp, PasswordForm, UserForm
-      lib/                 api client (fetch wrapper), password policy
+      components/          Stamp, PasswordForm, UserForm, workflow builder
+      lib/                 api client (fetch wrapper), password policy, workflow API
       routes/              TanStack Router routes
       styles.css
     e2e/                   Playwright specs
-docker-compose.yml         postgres + ftp-server + web for local dev
+  workflow/
+    cmd/workflow-server/   Go entrypoint (HTTP API + engine)
+    internal/
+      action/              file API client, templates, webhook/email
+      api/                 chi routes, proxy auth, CRUD/run endpoints
+      components/          component registry, schemas, validation, trigger matching
+      db/                  pgx pool + workflow schema migrations
+      engine/              dispatcher, executor, run locks, retries
+      model/               workflow/component/run types
+      store/               workflow + run persistence
+docker-compose.yml         postgres + ftp-server + workflow + web for local dev
 SPEC.md                    product specification (single source of truth)
 ```
 
@@ -190,21 +231,20 @@ bun install                   # installs all workspaces
 docker compose up --build
 ```
 
-This brings up Postgres on `:5432`, the FTP server on `:2121` (admin `:8080`), and the web UI on `:9001`. Open <http://localhost:9001> and sign in.
+This brings up Postgres on `:15432`, the FTP server on `:2121` (admin `:7000`), the workflow service on `:8081`, and the web UI on `:9001`. Open <http://localhost:9001>.
 
-To create an admin user on first boot, set in `.env`:
+For local development, Compose enables `ADMIN_LOCAL_LOGIN` and seeds a local admin:
 
 ```
-FTP_SEED=true
-FTP_SEED_USER=admin
-FTP_SEED_PASS=ChangeMe!1
-OIDC_ISSUER_URL=https://your-idp/realms/master
-OIDC_CLIENT_ID=cloud-file-server
-OIDC_CLIENT_SECRET=...
-OIDC_ADMIN_GROUP=cloud-file-server-admin
+username: localadmin
+password: ChangeMe123
 ```
 
-Without OIDC configured, the web UI has no admin login path (the seeded admin can only authenticate to the FTP server). See `SPEC.md` §4.6 / §14.
+Change `FTP_SEED_PASS` (and `ADMIN_LOCAL_LOGIN=false`) before using a shared host. `ADMIN_LOCAL_LOGIN` defaults to `false` outside Compose.
+
+SSO is also enabled when the `OIDC_*` variables are set. The IdP client must register `PUBLIC_URL + /api/v1/auth/oidc/callback` as a valid redirect URI. A localhost callback must be added to the client explicitly.
+
+If a browser returns `431 Request Header Fields Too Large`, it is sending oversized headers (usually accumulated `localhost` cookies). The web shim accepts up to 64 KB; clear site data for `localhost` or open <http://127.0.0.1:9001> instead.
 
 ### Web dev against a host-side FTP server
 
@@ -227,6 +267,7 @@ make run                      # uses DATABASE_URL from .env
 ```sh
 bun run build                 # builds the web SPA into apps/web/dist
 (cd apps/ftp && make build)   # produces apps/ftp/bin/ftp-server
+(cd apps/workflow && make build) # produces apps/workflow/bin/workflow-server
 ```
 
 The container images are produced by each app's `Dockerfile`.
@@ -234,9 +275,11 @@ The container images are produced by each app's `Dockerfile`.
 ## Test
 
 ```sh
-bun run typecheck             # tsc -b --noEmit for the SPA, go vet for the FTP server
+bun run typecheck             # SPA typecheck + go vet for both Go services
 bun run test:ftp              # go test -race ./... (FTP server)
+bun run test:workflow         # go test -race ./... (workflow service)
 bun run lint:ftp              # golangci-lint run ./...
+bun run lint:workflow         # golangci-lint run ./...
 ```
 
 End-to-end tests live in `apps/web/e2e/` (Playwright):
@@ -269,10 +312,15 @@ Every knob is an environment variable. See `SPEC.md` §10 for the full reference
 | `SFTP_ENABLED` | `false` | Enable SFTP server |
 | `SFTP_LISTEN` | `:2222` | SFTP control bind |
 | `SFTP_HOST_KEY` | empty | Base64 ed25519 host key (auto-generated if empty) |
+| `STORAGE_BACKEND` | `cos.objectstorage.plugin` | Default backend for new users (`local.objectstorage.plugin` for local disk) |
+| `STORAGE_ENABLED_BACKENDS` | default backend only | Backends users may be assigned to: `cos`, `local`, or `cos,local` |
+| `STORAGE_LOCAL_ROOT` | `./data` | Directory for users on the local backend |
 | `COS_BUCKET`, `COS_REGION` | `test-1409486316`, `ap-bangkok` | Default COS target |
 | `COS_STATIC_SECRET_ID`, `COS_STATIC_SECRET_KEY` | empty | Fallback AK/SK (required today) |
 | `ADMIN_LISTEN` | `:8080` | Admin HTTP bind |
 | `PUBLIC_URL` | `http://localhost:9001` | Public origin (used for OIDC redirect URI + cookie secure default) |
+| `ADMIN_LOCAL_LOGIN` | `false` | Enable the local admin password login endpoint (Compose sets `true`) |
+| `WEB_MAX_HEADER_SIZE` | `65536` | Web shim header limit; raise if a browser sends oversized cookies |
 | `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | empty | Enable SSO login |
 | `OIDC_ADMIN_GROUP`, `OIDC_READONLY_GROUP` | `admin`, `readonly` | Group → role mapping |
 | `FTP_SEED`, `FTP_SEED_USER`, `FTP_SEED_PASS` | `false`, `admin`, empty | Bootstrap admin |

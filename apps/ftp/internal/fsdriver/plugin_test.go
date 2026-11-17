@@ -54,3 +54,61 @@ func TestNewObjectStorage_COS(t *testing.T) {
 		t.Fatalf("got %T, want *COSPlugin", storage)
 	}
 }
+
+func TestNewStorageRouter_DefaultOnly(t *testing.T) {
+	cfg := &config.Config{StorageBackend: PluginLocal, StorageLocalRoot: t.TempDir()}
+	r, err := NewStorageRouter(cfg, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Enabled(); len(got) != 1 || got[0] != "local" || r.Default() != "local" {
+		t.Errorf("enabled=%v default=%q", got, r.Default())
+	}
+}
+
+func TestNewStorageRouter_BothBackends(t *testing.T) {
+	cfg := &config.Config{
+		StorageBackend:         PluginCOS,
+		StorageEnabledBackends: []string{"cos", "local"},
+		StorageLocalRoot:       t.TempDir(),
+		COSBucket:              "b", COSRegion: "r",
+	}
+	r, err := NewStorageRouter(cfg, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Enabled(); len(got) != 2 || r.Default() != "cos" {
+		t.Errorf("enabled=%v default=%q", got, r.Default())
+	}
+	if b, err := r.Backend("local"); err != nil {
+		t.Fatal(err)
+	} else if _, ok := b.(*LocalPlugin); !ok {
+		t.Errorf("local backend is %T", b)
+	}
+}
+
+func TestNewStorageRouter_Errors(t *testing.T) {
+	cases := map[string]*config.Config{
+		"unknown default": {StorageBackend: "bogus.objectstorage.plugin"},
+		"unknown enabled": {StorageBackend: PluginLocal, StorageEnabledBackends: []string{"local", "s3"}},
+		"default missing": {StorageBackend: PluginCOS, StorageEnabledBackends: []string{"local"}},
+	}
+	for name, cfg := range cases {
+		if _, err := NewStorageRouter(cfg, nil, nil); err == nil {
+			t.Errorf("%s: expected error", name)
+		}
+	}
+}
+
+func TestLocalPlugin_Mount_RejectsEscape(t *testing.T) {
+	dir := t.TempDir()
+	p := &LocalPlugin{Root: dir}
+	for _, bad := range []string{"/../evil", "../evil", "/a/../../evil"} {
+		if _, err := p.Mount(bad); err == nil {
+			t.Errorf("Mount(%q) succeeded, want escape error", bad)
+		}
+	}
+	if _, err := p.Mount("/ok/sub"); err != nil {
+		t.Errorf("Mount(/ok/sub): %v", err)
+	}
+}

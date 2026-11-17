@@ -56,10 +56,10 @@ type Server struct {
 	Authenticator core.Authenticator
 	Audit         *audit.Logger
 	Logger        *slog.Logger
-	// BackendLocation is the storage-backend URL emitted on every LOGOUT
-	// event (set by main after the storage plugin has its bucket/region
-	// ready). Same value as core.ObjectStorage.BackendLocation().
-	BackendLocation string
+	// BackendLocationFor returns the storage-backend URL of a user's data,
+	// stamped on that session's LOGOUT event. Same value as
+	// core.UserStorage.BackendLocation(u). May be nil (empty location).
+	BackendLocationFor func(u *db.FTPUser) string
 
 	srv     *ftpserver.FtpServer
 	serveWG sync.WaitGroup // tracks the Serve goroutine so Stop can drain it
@@ -141,7 +141,7 @@ func (s *Server) ClientDisconnected(cc ftpserver.ClientContext) {
 	if id, ok := cc.Extra().(authedSession); ok && id.Username != "" {
 		s.Audit.Log(audit.Event{
 			Username: id.Username, ClientIP: clientIPFromAddr(cc.RemoteAddr().String()),
-			Action: "LOGOUT", Success: true, ConnectionType: ConnType, BackendLocation: s.BackendLocation, RootFolder: id.RootFolder,
+			Action: "LOGOUT", Success: true, ConnectionType: ConnType, BackendLocation: id.BackendLocation, RootFolder: id.RootFolder,
 		})
 	}
 }
@@ -150,8 +150,9 @@ func (s *Server) ClientDisconnected(cc ftpserver.ClientContext) {
 // Extra so ClientDisconnected can attribute the LOGOUT event without a
 // second DB lookup.
 type authedSession struct {
-	Username   string
-	RootFolder string
+	Username        string
+	RootFolder      string
+	BackendLocation string
 }
 
 // ftpAccessDenied reports whether u is blocked from the FTP touchpoint
@@ -192,7 +193,11 @@ func (s *Server) AuthUser(cc ftpserver.ClientContext, user, pass string) (ftpser
 	if s.NewDriver == nil {
 		return nil, fmt.Errorf("ftpserver: no driver factory configured")
 	}
-	cc.SetExtra(authedSession{Username: u.Username, RootFolder: u.RootFolder})
+	backend := ""
+	if s.BackendLocationFor != nil {
+		backend = s.BackendLocationFor(u)
+	}
+	cc.SetExtra(authedSession{Username: u.Username, RootFolder: u.RootFolder, BackendLocation: backend})
 	return s.NewDriver(u, clientIP.String())
 }
 

@@ -19,7 +19,7 @@ export function UserNew() {
     <UserForm
       mode="create"
       submitting={mutation.isPending}
-      error={mutation.error ? String(mutation.error) : null}
+      error={mutation.error ? mutation.error.message : null}
       onSubmit={(values) => mutation.mutate(values)}
       onCancel={() => nav({ to: "/users" })}
     />

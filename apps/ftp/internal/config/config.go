@@ -34,16 +34,26 @@ type Config struct {
 	COSBucket                 string
 	COSRegion                 string
 	StorageBackend            string
-	StorageLocalRoot          string
-	STSRefreshRatio           float64
-	AuditRetentionDays        int
-	AuthLockoutLimit          int
-	AuthLockoutWindow         time.Duration
-	AdminListen               string
-	AdminCookieSecure         bool
-	SeedEnabled               bool
-	LogLevel                  string
-	LogFormat                 string
+	// StorageEnabledBackends lists the short backend names ("cos", "local")
+	// users may be assigned to. Empty means only the STORAGE_BACKEND default.
+	StorageEnabledBackends      []string
+	StorageLocalRoot            string
+	STSRefreshRatio             float64
+	AuditRetentionDays          int
+	AuthLockoutLimit            int
+	AuthLockoutWindow           time.Duration
+	AdminListen                 string
+	AdminCookieSecure           bool
+	SeedEnabled                 bool
+	AdminLocalLogin             bool
+	LogLevel                    string
+	LogFormat                   string
+	FileEventsEnabled           bool
+	FileEventsMimeSniffMode     string
+	FileEventsMimeSniffMaxBytes int64
+	FileEventRetentionDays      int
+	WorkflowAPIURL              string
+	WorkflowServiceToken        string
 
 	FTPDefaultRootPrefix string
 
@@ -59,37 +69,44 @@ type Config struct {
 
 func Load() (*Config, error) {
 	c := &Config{
-		DatabaseURL:               os.Getenv("DATABASE_URL"),
-		FTPListen:                 getenv("FTP_LISTEN", ":2121"),
-		FTPPublicIP:               os.Getenv("FTP_PUBLIC_IP"),
-		FTPLocalRoot:              getenv("FTP_LOCAL_ROOT", "/tmp/ftp-m1"),
-		FTPTLSCert:                os.Getenv("FTP_TLS_CERT"),
-		FTPTLSKey:                 os.Getenv("FTP_TLS_KEY"),
-		IdleTimeout:               300 * time.Second,
-		FTPAllowPlain:             getenv("FTP_ALLOW_PLAIN", "false") == "true",
-		FTPProxyProtocol:          getenv("FTP_PROXY_PROTOCOL", "false") == "true",
-		SFTPEnabled:               getenv("SFTP_ENABLED", "false") == "true",
-		FTPEnabled:                getenv("FTP_ENABLED", "false") == "true",
-		SFTPListen:                getenv("SFTP_LISTEN", ":2222"),
-		SFTPHostKey:               os.Getenv("SFTP_HOST_KEY"),
-		FTPDefaultAllowActive:     getenv("FTP_DEFAULT_ALLOW_ACTIVE", "false") == "true",
-		FTPDefaultRefuseOverwrite: getenv("FTP_DEFAULT_REFUSE_OVERWRITE", "false") == "true",
-		COSStaticSecretID:         os.Getenv("COS_STATIC_SECRET_ID"),
-		COSStaticSecretKey:        os.Getenv("COS_STATIC_SECRET_KEY"),
-		COSStaticSessionToken:     os.Getenv("COS_STATIC_SESSION_TOKEN"),
-		COSBucket:                 getenv("COS_BUCKET", "test-1409486316"),
-		COSRegion:                 getenv("COS_REGION", "ap-bangkok"),
-		StorageBackend:            getenv("STORAGE_BACKEND", "cos.objectstorage.plugin"), // must match fsdriver.PluginCOS
-		StorageLocalRoot:          getenv("STORAGE_LOCAL_ROOT", "./data"),
-		STSRefreshRatio:           0.8,
-		AuditRetentionDays:        365,
-		AuthLockoutLimit:          5,
-		AuthLockoutWindow:         15 * time.Minute,
-		AdminListen:               getenv("ADMIN_LISTEN", ":8080"),
-		AdminCookieSecure:         adminCookieSecure(getenv("ADMIN_COOKIE_SECURE", ""), getenv("PUBLIC_URL", "http://localhost:9001")),
-		SeedEnabled:               getenv("FTP_SEED", "false") == "true",
-		LogLevel:                  getenv("LOG_LEVEL", "info"),
-		LogFormat:                 getenv("LOG_FORMAT", "json"),
+		DatabaseURL:                 os.Getenv("DATABASE_URL"),
+		FTPListen:                   getenv("FTP_LISTEN", ":2121"),
+		FTPPublicIP:                 os.Getenv("FTP_PUBLIC_IP"),
+		FTPLocalRoot:                getenv("FTP_LOCAL_ROOT", "/tmp/ftp-m1"),
+		FTPTLSCert:                  os.Getenv("FTP_TLS_CERT"),
+		FTPTLSKey:                   os.Getenv("FTP_TLS_KEY"),
+		IdleTimeout:                 300 * time.Second,
+		FTPAllowPlain:               getenv("FTP_ALLOW_PLAIN", "false") == "true",
+		FTPProxyProtocol:            getenv("FTP_PROXY_PROTOCOL", "false") == "true",
+		SFTPEnabled:                 getenv("SFTP_ENABLED", "false") == "true",
+		FTPEnabled:                  getenv("FTP_ENABLED", "false") == "true",
+		SFTPListen:                  getenv("SFTP_LISTEN", ":2222"),
+		SFTPHostKey:                 os.Getenv("SFTP_HOST_KEY"),
+		FTPDefaultAllowActive:       getenv("FTP_DEFAULT_ALLOW_ACTIVE", "false") == "true",
+		FTPDefaultRefuseOverwrite:   getenv("FTP_DEFAULT_REFUSE_OVERWRITE", "false") == "true",
+		COSStaticSecretID:           os.Getenv("COS_STATIC_SECRET_ID"),
+		COSStaticSecretKey:          os.Getenv("COS_STATIC_SECRET_KEY"),
+		COSStaticSessionToken:       os.Getenv("COS_STATIC_SESSION_TOKEN"),
+		COSBucket:                   getenv("COS_BUCKET", "test-1409486316"),
+		COSRegion:                   getenv("COS_REGION", "ap-bangkok"),
+		StorageBackend:              getenv("STORAGE_BACKEND", "cos.objectstorage.plugin"), // must match fsdriver.PluginCOS
+		StorageLocalRoot:            getenv("STORAGE_LOCAL_ROOT", "./data"),
+		STSRefreshRatio:             0.8,
+		AuditRetentionDays:          365,
+		AuthLockoutLimit:            5,
+		AuthLockoutWindow:           15 * time.Minute,
+		AdminListen:                 getenv("ADMIN_LISTEN", ":8080"),
+		AdminCookieSecure:           adminCookieSecure(getenv("ADMIN_COOKIE_SECURE", ""), getenv("PUBLIC_URL", "http://localhost:9001")),
+		SeedEnabled:                 getenv("FTP_SEED", "false") == "true",
+		AdminLocalLogin:             getenv("ADMIN_LOCAL_LOGIN", "false") == "true",
+		LogLevel:                    getenv("LOG_LEVEL", "info"),
+		LogFormat:                   getenv("LOG_FORMAT", "json"),
+		FileEventsEnabled:           getenv("FILE_EVENTS_ENABLED", "true") == "true",
+		FileEventsMimeSniffMode:     strings.ToLower(getenv("FILE_EVENTS_MIME_SNIFF_MODE", "fallback")),
+		FileEventsMimeSniffMaxBytes: 8 << 20,
+		FileEventRetentionDays:      30,
+		WorkflowAPIURL:              os.Getenv("WORKFLOW_API_URL"),
+		WorkflowServiceToken:        os.Getenv("WORKFLOW_SERVICE_TOKEN"),
 
 		PublicURL: getenv("PUBLIC_URL", "http://localhost:9001"),
 
@@ -102,6 +119,7 @@ func Load() (*Config, error) {
 
 		FTPDefaultRootPrefix: getenv("FTP_DEFAULT_ROOT_PREFIX", "/t/t/"),
 	}
+	c.StorageEnabledBackends = splitList(os.Getenv("STORAGE_ENABLED_BACKENDS"))
 	if v := os.Getenv("FTP_PASSIVE_PORT_RANGE"); v != "" {
 		var s, e int
 		if _, err := fmt.Sscanf(v, "%d-%d", &s, &e); err != nil {
@@ -135,6 +153,31 @@ func Load() (*Config, error) {
 		}
 		c.AuditRetentionDays = n
 	}
+	if v := os.Getenv("FILE_EVENTS_MIME_SNIFF_MAX_BYTES"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("FILE_EVENTS_MIME_SNIFF_MAX_BYTES: %w", err)
+		}
+		if n <= 0 {
+			return nil, errors.New("FILE_EVENTS_MIME_SNIFF_MAX_BYTES must be > 0")
+		}
+		c.FileEventsMimeSniffMaxBytes = n
+	}
+	if v := os.Getenv("FILE_EVENT_RETENTION_DAYS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("FILE_EVENT_RETENTION_DAYS: %w", err)
+		}
+		if n <= 0 {
+			return nil, errors.New("FILE_EVENT_RETENTION_DAYS must be > 0")
+		}
+		c.FileEventRetentionDays = n
+	}
+	switch c.FileEventsMimeSniffMode {
+	case "fallback", "always", "off":
+	default:
+		return nil, fmt.Errorf("FILE_EVENTS_MIME_SNIFF_MODE: %q must be fallback, always, or off", c.FileEventsMimeSniffMode)
+	}
 	if c.DatabaseURL == "" {
 		return nil, errors.New("DATABASE_URL required")
 	}
@@ -157,4 +200,20 @@ func adminCookieSecure(envVal, publicURL string) bool {
 		return envVal == "true"
 	}
 	return strings.HasPrefix(strings.ToLower(publicURL), "https://")
+}
+
+// splitList parses a comma-separated list: trimmed, lower-cased, de-duplicated,
+// empty items dropped, order preserved.
+func splitList(v string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, part := range strings.Split(v, ",") {
+		part = strings.ToLower(strings.TrimSpace(part))
+		if part == "" || seen[part] {
+			continue
+		}
+		seen[part] = true
+		out = append(out, part)
+	}
+	return out
 }

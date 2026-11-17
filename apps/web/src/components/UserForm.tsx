@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { FTPUser } from "../lib/api";
-import { listFolders } from "../lib/api";
+import { getSession, listFolders, storageBackendLabel } from "../lib/api";
 import { generatePassword, validatePassword } from "../lib/password";
 
 export type UserFormValues = {
@@ -11,6 +11,7 @@ export type UserFormValues = {
   enabled: boolean;
   ftp_enabled: boolean;
   sftp_enabled: boolean;
+  storage_backend: string;
 };
 
 function FolderCombobox({
@@ -165,6 +166,18 @@ export function UserForm({
   const [ftpEnabled, setFtpEnabled] = useState(initial?.ftp_enabled ?? true);
   const [sftpEnabled, setSftpEnabled] = useState(initial?.sftp_enabled ?? false);
 
+  const sessionQ = useQuery({ queryKey: ["session"], queryFn: getSession });
+  const backends = sessionQ.data?.storage_backends ?? [];
+  const [chosenBackend, setChosenBackend] = useState<string | null>(null);
+  // Edit mode shows the user's fixed backend; create mode defaults to the
+  // deployment default until the admin picks another.
+  const storageBackend =
+    mode === "edit"
+      ? initial?.storage_backend ?? ""
+      : chosenBackend ?? sessionQ.data?.default_storage_backend ?? "";
+  // Folder suggestions come from the COS bucket, so only COS users get them.
+  const suggestFolders = storageBackend === "cos";
+
   const trimmedRoot = rootFolder.replace(/\/+$/, "");
   const trimmedSub = subFolder.replace(/\/+$/, "");
   const combinedPath = trimmedRoot + (trimmedSub ? "/" + trimmedSub : "");
@@ -180,25 +193,34 @@ export function UserForm({
   const rootFoldersQ = useQuery({
     queryKey: ["folders"],
     queryFn: () => listFolders(),
+    enabled: suggestFolders,
     retry: false,
   });
   const rootNames = (rootFoldersQ.data ?? []).map((f) => f.name.replace(/\/+$/, ""));
-  const willCreateRoot = trimmedRoot !== "" && !rootNames.includes(trimmedRoot);
+  const willCreateRoot = suggestFolders && trimmedRoot !== "" && !rootNames.includes(trimmedRoot);
 
   const subFoldersQ = useQuery({
     queryKey: ["folders", trimmedRoot],
     queryFn: () => listFolders(trimmedRoot),
-    enabled: trimmedRoot !== "",
+    enabled: suggestFolders && trimmedRoot !== "",
     retry: false,
   });
   const subNames = (subFoldersQ.data ?? []).map((f) => f.name.replace(/\/+$/, ""));
-  const willCreateSub = trimmedSub !== "" && !subNames.includes(trimmedSub);
+  const willCreateSub = suggestFolders && trimmedSub !== "" && !subNames.includes(trimmedSub);
 
   const passwordError = mode === "create" ? validatePassword(password) : null;
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    onSubmit({ username, root_folder: "/" + combinedPath, password, enabled, ftp_enabled: ftpEnabled, sftp_enabled: sftpEnabled });
+    onSubmit({
+      username,
+      root_folder: "/" + combinedPath,
+      password,
+      enabled,
+      ftp_enabled: ftpEnabled,
+      sftp_enabled: sftpEnabled,
+      storage_backend: storageBackend,
+    });
   }
 
   return (
@@ -219,6 +241,27 @@ export function UserForm({
         />
       </div>
 
+      {(mode === "edit" || backends.length > 1) && (
+        <div className="field">
+          <label htmlFor="storage_backend">Storage</label>
+          <select
+            id="storage_backend"
+            value={storageBackend}
+            disabled={mode === "edit" || sessionQ.isPending}
+            onChange={(e) => setChosenBackend(e.target.value)}
+          >
+            {(backends.length > 0 ? backends : [storageBackend]).filter(Boolean).map((b) => (
+              <option key={b} value={b}>{storageBackendLabel(b)}</option>
+            ))}
+          </select>
+          <p className="form-note">
+            {mode === "edit"
+              ? "Storage is fixed when the user is created."
+              : "Where this user's files are stored. Cannot be changed later."}
+          </p>
+        </div>
+      )}
+
       <FolderCombobox
         id="root_folder"
         label="Root folder"
@@ -229,6 +272,15 @@ export function UserForm({
         required
         note={willCreateRoot ? `Will create new folder "/${trimmedRoot}" on save.` : undefined}
       />
+      {suggestFolders && rootFoldersQ.isError && (
+        <p className="form-note" title={String(rootFoldersQ.error?.message ?? rootFoldersQ.error)}>
+          Folder suggestions are unavailable right now. You can still type a folder; the COS
+          connection is checked when you add the user.{" "}
+          <button type="button" className="btn btn-ghost" onClick={() => rootFoldersQ.refetch()}>
+            Retry
+          </button>
+        </p>
+      )}
 
       <FolderCombobox
         id="sub_folder"
@@ -273,29 +325,29 @@ export function UserForm({
 
       <div className="switch-row">
         <span className="switch">
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+          <input id="user-enabled" type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
           <span className="track" />
           <span className="thumb" />
         </span>
-        <label>{enabled ? "Enabled" : "Disabled"}</label>
+        <label htmlFor="user-enabled">{enabled ? "Enabled" : "Disabled"}</label>
       </div>
 
       <div className="switch-row">
         <span className="switch">
-          <input type="checkbox" checked={ftpEnabled} onChange={(e) => setFtpEnabled(e.target.checked)} />
+          <input id="user-ftp-enabled" type="checkbox" checked={ftpEnabled} onChange={(e) => setFtpEnabled(e.target.checked)} />
           <span className="track" />
           <span className="thumb" />
         </span>
-        <label>FTP access {ftpEnabled ? "enabled" : "disabled"}</label>
+        <label htmlFor="user-ftp-enabled">FTP access {ftpEnabled ? "enabled" : "disabled"}</label>
       </div>
 
       <div className="switch-row">
         <span className="switch">
-          <input type="checkbox" checked={sftpEnabled} onChange={(e) => setSftpEnabled(e.target.checked)} />
+          <input id="user-sftp-enabled" type="checkbox" checked={sftpEnabled} onChange={(e) => setSftpEnabled(e.target.checked)} />
           <span className="track" />
           <span className="thumb" />
         </span>
-        <label>SFTP access {sftpEnabled ? "enabled" : "disabled"}</label>
+        <label htmlFor="user-sftp-enabled">SFTP access {sftpEnabled ? "enabled" : "disabled"}</label>
       </div>
 
       {error && <p className="err">{error}</p>}
@@ -308,25 +360,6 @@ export function UserForm({
           Cancel
         </button>
       </div>
-
-      {rootFoldersQ.isError && (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="cos-err-title">
-          <div className="modal-dialog">
-            <h3 id="cos-err-title">Can't load folders</h3>
-            <p className="modal-body">
-              Could not load folder suggestions: {String(rootFoldersQ.error?.message ?? rootFoldersQ.error)}
-            </p>
-            <div className="form-actions">
-              <button type="button" className="btn btn-ghost" onClick={() => rootFoldersQ.refetch()}>
-                Retry
-              </button>
-              <button type="button" className="btn btn-primary" onClick={onCancel}>
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </form>
   );
 }

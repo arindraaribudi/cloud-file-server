@@ -53,8 +53,9 @@ type Server struct {
 	// public-key auth path and for mounting storage once a session is
 	// authenticated. Set to db.GetFTPUserPublicKey in production.
 	LookupUser func(ctx context.Context, username string) (*db.FTPUser, error)
-	Storage    core.ObjectStorage
+	Storage    core.UserStorage
 	Audit      *audit.Logger
+	FileEvents fsdriver.FileEventSink
 	Logger     *slog.Logger
 
 	listener net.Listener
@@ -207,7 +208,7 @@ func (s *Server) serveSFTP(sconn *ssh.ServerConn, ch ssh.Channel) {
 	if err != nil || u == nil {
 		return
 	}
-	fs, err := s.Storage.Mount(u.RootFolder)
+	fs, err := s.Storage.Mount(u)
 	if err != nil {
 		if s.Logger != nil {
 			s.Logger.Error("sftp: mount failed", "username", u.Username, "err", err)
@@ -215,8 +216,8 @@ func (s *Server) serveSFTP(sconn *ssh.ServerConn, ch ssh.Channel) {
 		return
 	}
 	clientIP := clientIPFromAddr(sconn.RemoteAddr().String())
-	backend := s.Storage.BackendLocation()
-	auditedFS := fsdriver.NewAuditFS(fs, s.Audit, u.Username, clientIP, ConnType, backend, u.RootFolder)
+	backend := s.Storage.BackendLocation(u)
+	auditedFS := fsdriver.NewAuditFS(fs, s.Audit, u.Username, clientIP, ConnType, backend, u.RootFolder, fsdriver.AuditOptions{UserID: u.ID, Events: s.FileEvents})
 	handlers := fsdriver.NewSFTPHandlers(auditedFS)
 	reqServer := sftp.NewRequestServer(ch, handlers)
 	_ = reqServer.Serve()

@@ -17,7 +17,9 @@
     "@tanstack/react-router": "^1.95.0",
     "@tanstack/react-table": "^8.20.5",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "sequential-workflow-designer": "0.40.4",
+    "sequential-workflow-designer-react": "0.40.4"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.1",

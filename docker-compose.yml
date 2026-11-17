@@ -18,6 +18,8 @@ services:
   ftp-server:
     build:
       context: ./apps/ftp
+    volumes:
+      - localdata:/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -32,13 +34,19 @@ services:
       FTP_ALLOW_PLAIN: "true"
       ADMIN_LISTEN: ":7000"
       ADMIN_COOKIE_SECURE: "false"
-      FTP_SEED: ${FTP_SEED:-false}
-      FTP_SEED_USER: ${FTP_SEED_USER:-admin}
-      FTP_SEED_PASS: ${FTP_SEED_PASS:-}
+      ADMIN_LOCAL_LOGIN: ${ADMIN_LOCAL_LOGIN:-true}
+      FTP_SEED: ${FTP_SEED:-true}
+      FTP_SEED_USER: ${FTP_SEED_USER:-localadmin}
+      FTP_SEED_PASS: ${FTP_SEED_PASS:-ChangeMe123}
       COS_USE_POD_IDENTITY: "false"
       COS_STATIC_SECRET_ID: ${COS_STATIC_SECRET_ID:-changeme}
       COS_STATIC_SECRET_KEY: ${COS_STATIC_SECRET_KEY:-changeme}
       COS_STATIC_SESSION_TOKEN: ${COS_STATIC_SESSION_TOKEN:-}
+      # Storage backends users can be assigned to: "cos", "local", or "cos,local".
+      # STORAGE_BACKEND is the default for users that don't pick one.
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-cos.objectstorage.plugin}
+      STORAGE_ENABLED_BACKENDS: ${STORAGE_ENABLED_BACKENDS:-}
+      STORAGE_LOCAL_ROOT: ${STORAGE_LOCAL_ROOT:-/data}
       COS_BUCKET: ${COS_BUCKET:-test-1409486316}
       COS_REGION: ${COS_REGION:-ap-bangkok}
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:9001}
@@ -49,11 +57,45 @@ services:
       OIDC_READONLY_GROUP: ${OIDC_READONLY_GROUP:-readonly}
       OIDC_FRONTEND_REDIRECT_URL: ${OIDC_FRONTEND_REDIRECT_URL:-/auth/callback}
       FTP_DEFAULT_ROOT_PREFIX: ${FTP_DEFAULT_ROOT_PREFIX:-/t/t/}
+      FILE_EVENTS_ENABLED: ${FILE_EVENTS_ENABLED:-true}
+      FILE_EVENTS_MIME_SNIFF_MODE: ${FILE_EVENTS_MIME_SNIFF_MODE:-fallback}
+      FILE_EVENTS_MIME_SNIFF_MAX_BYTES: ${FILE_EVENTS_MIME_SNIFF_MAX_BYTES:-8388608}
+      FILE_EVENT_RETENTION_DAYS: ${FILE_EVENT_RETENTION_DAYS:-30}
+      WORKFLOW_API_URL: http://workflow:8081
+      WORKFLOW_SERVICE_TOKEN: ${WORKFLOW_SERVICE_TOKEN:-dev-workflow-token}
     ports:
       - "${FTP_PORT:-2121}:${FTP_PORT:-2121}"
       - "${SFTP_PORT:-2222}:${SFTP_PORT:-2222}"
       - "7000:7000"
       - "50000-50999:50000-50999"
+
+  workflow:
+    build:
+      context: ./apps/workflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ftp-server:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgres://ftp:ftp@postgres:5432/ftp?sslmode=disable
+      WORKFLOW_LISTEN: ":8081"
+      WORKFLOW_FILE_API_URL: http://ftp-server:7000
+      WORKFLOW_SERVICE_TOKEN: ${WORKFLOW_SERVICE_TOKEN:-dev-workflow-token}
+      WORKFLOW_WORKERS: "4"
+      WORKFLOW_POLL_INTERVAL: 500ms
+      WORKFLOW_MAX_ATTEMPTS: "3"
+      WORKFLOW_COMPONENT_TIMEOUT: 60s
+      WORKFLOW_RUN_TIMEOUT: 10m
+      WORKFLOW_RUN_RETENTION_DAYS: "90"
+      WORKFLOW_SMTP_HOST: ${WORKFLOW_SMTP_HOST:-}
+      WORKFLOW_SMTP_PORT: ${WORKFLOW_SMTP_PORT:-587}
+      WORKFLOW_SMTP_FROM: ${WORKFLOW_SMTP_FROM:-}
+      WORKFLOW_WEBHOOK_ALLOW_PRIVATE: "true"
+      # Plain-http webhook targets are blocked unless explicitly allowed (dev only).
+      WORKFLOW_WEBHOOK_ALLOW_HTTP: ${WORKFLOW_WEBHOOK_ALLOW_HTTP:-false}
+    ports:
+      - "8081:8081"
 
   web:
     build:
@@ -69,3 +111,4 @@ services:
 
 volumes:
   pgdata:
+  localdata:

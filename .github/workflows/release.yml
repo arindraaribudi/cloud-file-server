@@ -107,6 +107,42 @@ jobs:
       - working-directory: apps/ftp
         run: go build -o /tmp/ftp-server-build ./cmd/ftp-server
 
+  workflow-test:
+    name: go test (workflow)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version: "1.26.6"
+          cache: true
+          cache-dependency-path: apps/workflow/go.sum
+      - working-directory: apps/workflow
+        run: go test -race ./...
+
+  workflow-build:
+    name: go build (workflow)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version: "1.26.6"
+          cache: true
+          cache-dependency-path: apps/workflow/go.sum
+      - working-directory: apps/workflow
+        run: go build -o /tmp/workflow-server-build ./cmd/workflow-server
+
   web-typecheck:
     name: typecheck (web)
     runs-on: ubuntu-24.04
@@ -146,7 +182,7 @@ jobs:
   release:
     name: release
     runs-on: ubuntu-24.04
-    needs: [govulncheck, lint, test, build, web-typecheck, web-build]
+    needs: [govulncheck, lint, test, build, workflow-test, workflow-build, web-typecheck, web-build]
     timeout-minutes: 30
     outputs:
       tag: ${{ steps.version.outputs.tag }}

@@ -11,7 +11,7 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
-const ftpUserColumns = "id, username, password_hash, root_folder, cos_bucket, COALESCE(cos_region, ''), enabled, allow_active_mode, refuse_overwrite, max_sessions, ftp_enabled, sftp_enabled, created_at, updated_at, deleted_at, last_login"
+const ftpUserColumns = "id, username, password_hash, root_folder, cos_bucket, COALESCE(cos_region, ''), enabled, allow_active_mode, refuse_overwrite, max_sessions, ftp_enabled, sftp_enabled, COALESCE(storage_backend, ''), created_at, updated_at, deleted_at, last_login"
 
 type FTPUser struct {
 	ID              int64  `json:"id"`
@@ -26,6 +26,9 @@ type FTPUser struct {
 	MaxSessions     int    `json:"max_sessions"`
 	FTPEnabled      bool   `json:"ftp_enabled"`
 	SFTPEnabled     bool   `json:"sftp_enabled"`
+	// StorageBackend is the short backend name ("cos", "local"). Empty means
+	// the deployment default; API handlers resolve it before responding.
+	StorageBackend string `json:"storage_backend"`
 	// SFTPPublicKey is never included in ftpUserColumns/the general JSON
 	// response — fetched only via GetFTPUserPublicKey, which the SFTP
 	// touchpoint uses for its pubkey-auth lookup.
@@ -47,10 +50,10 @@ type AdminUser struct {
 func CreateFTPUser(ctx context.Context, pool *pgxpool.Pool, u *FTPUser) (int64, error) {
 	var id int64
 	err := pool.QueryRow(ctx, `
-		INSERT INTO ftp_users (username, password_hash, root_folder, cos_bucket, cos_region, enabled, allow_active_mode, refuse_overwrite, max_sessions, ftp_enabled, sftp_enabled)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+		INSERT INTO ftp_users (username, password_hash, root_folder, cos_bucket, cos_region, enabled, allow_active_mode, refuse_overwrite, max_sessions, ftp_enabled, sftp_enabled, storage_backend)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
 		u.Username, u.PasswordHash, u.RootFolder, u.COSBucket, nilIfEmpty(u.COSRegion),
-		u.Enabled, u.AllowActiveMode, u.RefuseOverwrite, u.MaxSessions, u.FTPEnabled, u.SFTPEnabled).Scan(&id)
+		u.Enabled, u.AllowActiveMode, u.RefuseOverwrite, u.MaxSessions, u.FTPEnabled, u.SFTPEnabled, nilIfEmpty(u.StorageBackend)).Scan(&id)
 	return id, err
 }
 
@@ -61,7 +64,7 @@ func GetFTPUserByUsername(ctx context.Context, pool *pgxpool.Pool, name string) 
 		FROM ftp_users WHERE username=$1 AND deleted_at IS NULL`, name).
 		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.RootFolder, &u.COSBucket, &u.COSRegion,
 			&u.Enabled, &u.AllowActiveMode, &u.RefuseOverwrite, &u.MaxSessions,
-			&u.FTPEnabled, &u.SFTPEnabled,
+			&u.FTPEnabled, &u.SFTPEnabled, &u.StorageBackend,
 			&u.CreatedAt, &u.UpdatedAt, &u.DeletedAt, &u.LastLogin)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -77,7 +80,7 @@ func GetFTPUserByID(ctx context.Context, pool *pgxpool.Pool, id int64) (*FTPUser
 		`SELECT `+ftpUserColumns+` FROM ftp_users WHERE id=$1 AND deleted_at IS NULL`, id).
 		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.RootFolder, &u.COSBucket,
 			&u.COSRegion, &u.Enabled, &u.AllowActiveMode, &u.RefuseOverwrite,
-			&u.MaxSessions, &u.FTPEnabled, &u.SFTPEnabled,
+			&u.MaxSessions, &u.FTPEnabled, &u.SFTPEnabled, &u.StorageBackend,
 			&u.CreatedAt, &u.UpdatedAt, &u.DeletedAt, &u.LastLogin)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -95,9 +98,9 @@ func GetFTPUserByID(ctx context.Context, pool *pgxpool.Pool, id int64) (*FTPUser
 func GetFTPUserPublicKey(ctx context.Context, pool *pgxpool.Pool, username string) (*FTPUser, error) {
 	u := &FTPUser{}
 	err := pool.QueryRow(ctx, `
-		SELECT id, username, root_folder, enabled, sftp_enabled, COALESCE(sftp_public_key, '')
+		SELECT id, username, root_folder, enabled, sftp_enabled, COALESCE(sftp_public_key, ''), COALESCE(storage_backend, '')
 		FROM ftp_users WHERE username=$1 AND deleted_at IS NULL`, username).
-		Scan(&u.ID, &u.Username, &u.RootFolder, &u.Enabled, &u.SFTPEnabled, &u.SFTPPublicKey)
+		Scan(&u.ID, &u.Username, &u.RootFolder, &u.Enabled, &u.SFTPEnabled, &u.SFTPPublicKey, &u.StorageBackend)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -151,7 +154,7 @@ func ListFTPUsers(ctx context.Context, pool *pgxpool.Pool, search string, limit,
 		u := &FTPUser{}
 		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.RootFolder, &u.COSBucket, &u.COSRegion,
 			&u.Enabled, &u.AllowActiveMode, &u.RefuseOverwrite, &u.MaxSessions,
-			&u.FTPEnabled, &u.SFTPEnabled,
+			&u.FTPEnabled, &u.SFTPEnabled, &u.StorageBackend,
 			&u.CreatedAt, &u.UpdatedAt, &u.DeletedAt, &u.LastLogin); err != nil {
 			return nil, err
 		}
@@ -181,6 +184,46 @@ func GetAdminUserByUsername(ctx context.Context, pool *pgxpool.Pool, name string
 
 func UpdateAdminUserPassword(ctx context.Context, pool *pgxpool.Pool, username, hash string) error {
 	_, err := pool.Exec(ctx, `UPDATE admin_users SET password_hash=$2 WHERE username=$1`, username, hash)
+	return err
+}
+
+func ListAdminUsers(ctx context.Context, pool *pgxpool.Pool) ([]*AdminUser, error) {
+	rows, err := pool.Query(ctx,
+		`SELECT id, username, password_hash, role, created_at FROM admin_users ORDER BY username`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*AdminUser{}
+	for rows.Next() {
+		u := &AdminUser{}
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+func CountAdminUsers(ctx context.Context, pool *pgxpool.Pool) (int, error) {
+	var n int
+	err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM admin_users`).Scan(&n)
+	return n, err
+}
+
+func CountAdminRoleUsers(ctx context.Context, pool *pgxpool.Pool) (int, error) {
+	var n int
+	err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM admin_users WHERE lower(role) IN ('admin','superadmin')`).Scan(&n)
+	return n, err
+}
+
+func UpdateAdminUserRole(ctx context.Context, pool *pgxpool.Pool, username, role string) error {
+	_, err := pool.Exec(ctx, `UPDATE admin_users SET role=$2 WHERE username=$1`, username, role)
+	return err
+}
+
+func DeleteAdminUser(ctx context.Context, pool *pgxpool.Pool, username string) error {
+	_, err := pool.Exec(ctx, `DELETE FROM admin_users WHERE username=$1`, username)
 	return err
 }
 

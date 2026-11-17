@@ -22,6 +22,7 @@ import (
 	"github.com/example/cos-ftp-server/internal/core"
 	"github.com/example/cos-ftp-server/internal/cos"
 	"github.com/example/cos-ftp-server/internal/db"
+	"github.com/example/cos-ftp-server/internal/fileevents"
 	"github.com/example/cos-ftp-server/internal/fsdriver"
 	"github.com/example/cos-ftp-server/internal/ftpserver"
 	"github.com/example/cos-ftp-server/internal/sftpserver"
@@ -60,6 +61,15 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 	log.Info("db: migrations up to date")
 
+	var fileEvents *fileevents.Publisher
+	if cfg.FileEventsEnabled {
+		fileEvents = fileevents.NewPublisher(pool, log, cfg.FileEventsMimeSniffMode, cfg.FileEventsMimeSniffMaxBytes)
+		go fileEvents.RunRetention(ctx, cfg.FileEventRetentionDays)
+		log.Info("file events: enabled", "mime_mode", cfg.FileEventsMimeSniffMode, "retention_days", cfg.FileEventRetentionDays)
+	} else {
+		log.Info("file events: disabled")
+	}
+
 	if cfg.SeedEnabled {
 		log.Info("seed: enabled, applying")
 		if user, pass := os.Getenv("FTP_SEED_USER"), os.Getenv("FTP_SEED_PASS"); user != "" && pass != "" {
@@ -84,7 +94,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	auditLog := audit.New(pool, log)
 	defer func() { _ = auditLog.Close(context.Background()) }()
 
-	storage, err := fsdriver.NewObjectStorage(cfg.StorageBackend, cfg, auditLog, log)
+	storage, err := fsdriver.NewStorageRouter(cfg, auditLog, log)
 	if err != nil {
 		return fmt.Errorf("storage: %w", err)
 	}
@@ -92,9 +102,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return fmt.Errorf("storage: %w", err)
 	}
 	var cosClient *cos.Client
-	if cp, ok := storage.(*fsdriver.COSPlugin); ok {
-		cosClient = cp.Client()
+	if b, err := storage.Backend(core.BackendCOS); err == nil {
+		if cp, ok := b.(*fsdriver.COSPlugin); ok {
+			cosClient = cp.Client()
+		}
 	}
+	log.Info("storage: backends ready", "enabled", storage.Enabled(), "default", storage.Default())
 
 	srv := &ftpserver.Server{
 		Addr:             cfg.FTPListen,
@@ -103,11 +116,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 		IdleTimeout:      cfg.IdleTimeout,
 		ProxyProtocol:    cfg.FTPProxyProtocol,
 		NewDriver: func(u *db.FTPUser, clientIP string) (ftpserverlib.ClientDriver, error) {
-			fs, err := storage.Mount(u.RootFolder)
+			fs, err := storage.Mount(u)
 			if err != nil {
 				return nil, fmt.Errorf("mount: %w", err)
 			}
-			backend := storage.BackendLocation()
+			backend := storage.BackendLocation(u)
 			log.Info("ftp: user connected", "username", u.Username, "client_ip", clientIP, "backend", backend, "root_prefix", u.RootFolder)
 			auditLog.Log(audit.Event{
 				Username:        u.Username,
@@ -119,16 +132,16 @@ func run(ctx context.Context, log *slog.Logger) error {
 				RootFolder:      u.RootFolder,
 				Detail:          map[string]any{"backend": backend, "root_prefix": u.RootFolder},
 			})
-			return fsdriver.NewAuditFS(fs, auditLog, u.Username, net.ParseIP(clientIP), "ftp", backend, u.RootFolder), nil
+			return fsdriver.NewAuditFS(fs, auditLog, u.Username, net.ParseIP(clientIP), "ftp", backend, u.RootFolder, fsdriver.AuditOptions{UserID: u.ID, Events: fileEvents}), nil
 		},
 		Authenticator: &core.DBAuthenticator{
 			Pool:    pool,
 			Lockout: auth.NewLockout(cfg.AuthLockoutLimit, cfg.AuthLockoutWindow),
 			Audit:   auditLog,
 		},
-		Audit:           auditLog,
-		Logger:          log,
-		BackendLocation: storage.BackendLocation(),
+		Audit:              auditLog,
+		Logger:             log,
+		BackendLocationFor: storage.BackendLocation,
 	}
 	if cfg.FTPTLSCert != "" && cfg.FTPTLSKey != "" {
 		srv.TLS = &ftpserver.TLSConfig{
@@ -168,9 +181,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 			LookupUser: func(ctx context.Context, username string) (*db.FTPUser, error) {
 				return db.GetFTPUserPublicKey(ctx, pool, username)
 			},
-			Storage: storage,
-			Audit:   auditLog,
-			Logger:  log,
+			Storage:    storage,
+			Audit:      auditLog,
+			FileEvents: fileEvents,
+			Logger:     log,
 		}
 		if err := sftpSrv.Start(ctx); err != nil {
 			return fmt.Errorf("sftp: %w", err)
@@ -180,6 +194,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 
 	// Admin API + metrics on cfg.AdminListen (default :8080).
 	adminAPI := admin.New(pool, cfg.AdminCookieSecure, cfg.COSBucket, cfg.COSRegion, cosClient, storage, cfg.FTPDefaultRootPrefix, auditLog)
+	adminAPI.WorkflowAPIURL = cfg.WorkflowAPIURL
+	adminAPI.WorkflowServiceToken = cfg.WorkflowServiceToken
+	adminAPI.LocalLogin = cfg.AdminLocalLogin
 	if cfg.FTPPublicIP != "" {
 		adminAPI.FTPAddress = cfg.FTPPublicIP + cfg.FTPListen
 		adminAPI.SFTPAddress = cfg.FTPPublicIP + cfg.SFTPListen

@@ -9,6 +9,13 @@ import { UserPassword } from "./routes/user-password";
 import { UserSFTPKey } from "./routes/user-sftp-key";
 import { Audit } from "./routes/audit";
 import { Files } from "./routes/files";
+import { Workflows } from "./routes/workflows";
+import { WorkflowNew, WorkflowEdit } from "./routes/workflow-editor";
+import { WorkflowRuns, WorkflowRunDetail } from "./routes/workflow-runs";
+import { Admins } from "./routes/admins";
+import { AdminNew } from "./routes/admin-new";
+import { AdminPassword } from "./routes/admin-password";
+import type { Session } from "./lib/api";
 
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
@@ -37,6 +44,22 @@ const indexRoute = createRoute({
 const authedRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: "_authed",
+  beforeLoad: async () => {
+    let response: Response;
+    try {
+      response = await fetch("/api/v1/auth/session", { credentials: "include" });
+    } catch {
+      throw redirect({ to: "/login" });
+    }
+    if (!response.ok) {
+      throw redirect({ to: "/login" });
+    }
+    try {
+      return { session: (await response.json()) as Session };
+    } catch {
+      throw redirect({ to: "/login" });
+    }
+  },
   component: AuthedLayout,
 });
 
@@ -85,6 +108,54 @@ const filesRoute = createRoute({
   }),
 });
 
+const workflowsRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: "/workflows",
+  component: Workflows,
+});
+
+const workflowNewRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: "/workflows/new",
+  component: WorkflowNew,
+});
+
+const workflowEditRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: "/workflows/$id/edit",
+  component: WorkflowEdit,
+});
+
+const workflowRunsRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: "/workflows/$id/runs",
+  component: WorkflowRuns,
+});
+
+const workflowRunDetailRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: "/workflows/$id/runs/$runId",
+  component: WorkflowRunDetail,
+});
+
+const adminsRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: "/admins",
+  component: Admins,
+});
+
+const adminNewRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: "/admins/new",
+  component: AdminNew,
+});
+
+const adminPasswordRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: "/admins/$username/password",
+  component: AdminPassword,
+});
+
 export const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
@@ -98,6 +169,14 @@ export const router = createRouter({
       userSFTPKeyRoute,
       auditRoute,
       filesRoute,
+      workflowsRoute,
+      workflowNewRoute,
+      workflowEditRoute,
+      workflowRunsRoute,
+      workflowRunDetailRoute,
+      adminsRoute,
+      adminNewRoute,
+      adminPasswordRoute,
     ]),
   ]),
   defaultPreload: "intent",

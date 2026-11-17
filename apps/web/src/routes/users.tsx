@@ -12,7 +12,7 @@ import {
   type ColumnFiltersState,
   type SortingState,
 } from "@tanstack/react-table";
-import { api, deleteUser, updateUser, type FTPUser } from "../lib/api";
+import { api, deleteUser, storageBackendLabel, updateUser, type FTPUser } from "../lib/api";
 import { Stamp } from "../components/Stamp";
 
 function FolderIcon() {
@@ -129,6 +129,10 @@ export function Users() {
       columnHelper.accessor("root_folder", {
         header: "Root folder",
         cell: (info) => <span className="mono">{info.getValue()}</span>,
+      }),
+      columnHelper.accessor("storage_backend", {
+        header: "Storage",
+        cell: (info) => <span className="mono">{storageBackendLabel(info.getValue())}</span>,
       }),
       columnHelper.accessor("enabled", {
         header: "Status",

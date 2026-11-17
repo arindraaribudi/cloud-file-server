@@ -6,9 +6,12 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/ftp-server ./cmd/ftp-server
+# Writable data dir for users on the "local" storage backend (STORAGE_LOCAL_ROOT).
+RUN mkdir -p /out/data
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/ftp-server /usr/local/bin/ftp-server
+COPY --from=build --chown=nonroot:nonroot /out/data /data
 USER nonroot:nonroot
 EXPOSE 2121
 # Passive data ports — see FTP_PASSIVE_PORT_RANGE in compose.

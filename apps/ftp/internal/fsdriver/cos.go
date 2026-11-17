@@ -110,6 +110,20 @@ func (v *COS) Create(name string) (afero.File, error) {
 	return &memWriteFile{buf: &bytes.Buffer{}, finalKey: v.fullKey(name), c: v.c}, nil
 }
 
+// ReadRange fetches up to length bytes at offset without materializing the
+// whole object. fileevents uses it for MIME sniffing.
+func (v *COS) ReadRange(name string, offset, length int64) ([]byte, error) {
+	if length <= 0 {
+		return nil, nil
+	}
+	rc, err := v.c.Get(context.Background(), v.fullKey(name), offset, length)
+	if err != nil {
+		return nil, wrapBackendErr(err)
+	}
+	defer func() { _ = rc.Close() }()
+	return io.ReadAll(io.LimitReader(rc, length))
+}
+
 func (v *COS) OpenFile(name string, flag int, perm os.FileMode) (afero.File, error) {
 	if flag&os.O_CREATE != 0 {
 		return v.Create(name)

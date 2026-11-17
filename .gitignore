@@ -6,6 +6,11 @@ migrate
 *.out
 coverage.out
 coverage.html
+.gocache/
+.docker-config/
+.tmp/
+.bun-cache/
+.playwright-browsers/
 
 # JS/TS workspaces
 node_modules/

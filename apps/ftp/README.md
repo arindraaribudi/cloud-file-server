@@ -11,10 +11,10 @@ internal/
   audit/            append-only audit log writer (batched inserts) + retention/cleanup job
   auth/             password hashing/validation, login lockout
   config/           env -> Config, one Load()
-  core/             shared interfaces (Authenticator, ObjectStorage, Touchpoint) — no impl
+  core/             shared interfaces (Authenticator, ObjectStorage, UserStorage, Touchpoint) + StorageRouter (per-user backend routing)
   cos/              Tencent COS SDK client wrapper (creds refresh, auth-error detection)
   db/               Postgres pool, migrations (db/migrations), seed data (db/seeds), queries
-  fsdriver/         core.ObjectStorage impl: picks COS or local backend (STORAGE_BACKEND)
+  fsdriver/         core.ObjectStorage impls (COS, local) + NewStorageRouter (STORAGE_BACKEND default, STORAGE_ENABLED_BACKENDS)
   ftpserver/        FTP protocol server (ftpserverlib), TLS, session tracking
   telemetry/        Prometheus /metrics handler
 docs/               spec.md (requirements), runbook.md (ops)
@@ -28,7 +28,7 @@ scripts/            smoke.sh
 |---|---|
 | Add/change an admin REST endpoint | `internal/admin` (`*_api.go` by resource, router in `api.go`) |
 | Change FTP login / auth checks | `internal/ftpserver` (`AuthUser`) + `internal/auth` |
-| Add a storage backend | `internal/fsdriver` (implement `core.ObjectStorage`) |
+| Add a storage backend | `internal/fsdriver` (implement `core.ObjectStorage`, register in `backendPlugins`) |
 | Change what gets audited | `internal/audit` |
 | New env var / config field | `internal/config` |
 | DB schema change | `internal/db/migrations` |

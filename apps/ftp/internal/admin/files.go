@@ -74,7 +74,7 @@ func (a *API) userFsFor(u *db.FTPUser) (afero.Fs, error) {
 	if a.Storage == nil {
 		return nil, errStorageNotConfigured
 	}
-	return a.Storage.Mount(u.RootFolder)
+	return a.Storage.Mount(u)
 }
 
 // loadUser parses {userId} from URL and loads the FTPUser.

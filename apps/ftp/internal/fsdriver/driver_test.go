@@ -64,7 +64,7 @@ func TestAuditFS_OpenDirectorySurfacesEntries(t *testing.T) {
 			},
 		},
 	}
-	a := NewAuditFS(inner, nil, "u", nil, "ftp", "test", "/")
+	a := NewAuditFS(inner, nil, "u", nil, "ftp", "test", "/", AuditOptions{})
 
 	f, err := a.Open("/")
 	if err != nil {
@@ -103,7 +103,7 @@ func TestAuditFS_OpenFileKeepsDownloadPath(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	a := NewAuditFS(NewLocal(dir), nil, "u", nil, "ftp", "test", "/")
+	a := NewAuditFS(NewLocal(dir), nil, "u", nil, "ftp", "test", "/", AuditOptions{})
 	f, err := a.Open("/f.txt")
 	if err != nil {
 		t.Fatal(err)

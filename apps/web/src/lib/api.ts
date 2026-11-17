@@ -26,7 +26,24 @@ export type Session = {
   sftp_address: string;
   sftp_public_address: string;
   cos_address: string;
+  /** Storage backends users can be assigned to ("cos", "local"). */
+  storage_backends: string[];
+  default_storage_backend: string;
 };
+
+export const STORAGE_BACKEND_LABELS: Record<string, string> = {
+  cos: "Tencent COS",
+  local: "Local disk",
+};
+
+export function storageBackendLabel(name: string | undefined): string {
+  if (!name) return "—";
+  return STORAGE_BACKEND_LABELS[name] ?? name;
+}
+
+export function getSession() {
+  return api<Session>("/api/v1/auth/session");
+}
 
 export type FTPUser = {
   id: number;
@@ -35,9 +52,22 @@ export type FTPUser = {
   enabled: boolean;
   ftp_enabled: boolean;
   sftp_enabled: boolean;
+  /** Effective storage backend, fixed at creation. */
+  storage_backend: string;
   created_at: string;
   last_login: string | null;
 };
+
+/** Fetches every (non-deleted) FTP user, paging past the API's 200 cap. */
+export async function listAllUsers(): Promise<FTPUser[]> {
+  const pageSize = 200;
+  const out: FTPUser[] = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const page = await api<FTPUser[]>(`/api/v1/users?limit=${pageSize}&offset=${offset}`);
+    out.push(...page);
+    if (page.length < pageSize) return out;
+  }
+}
 
 export type AuditEvent = {
   event_time: string;
@@ -61,6 +91,7 @@ export function createUser(payload: {
   enabled: boolean;
   ftp_enabled: boolean;
   sftp_enabled: boolean;
+  storage_backend?: string;
 }) {
   return api<FTPUser>("/api/v1/users", { method: "POST", body: JSON.stringify(payload) });
 }
@@ -112,4 +143,37 @@ export type ListFilesResponse = {
 export function listFiles(userId: string | number, prefix = ""): Promise<ListFilesResponse> {
   const q = prefix ? `?prefix=${encodeURIComponent(prefix)}` : "";
   return api<ListFilesResponse>(`/api/v1/files/${userId}${q}`);
+}
+
+export type AdminUser = {
+  id: number;
+  username: string;
+  role: string;
+  created_at: string;
+};
+
+export function listAdmins() {
+  return api<AdminUser[]>("/api/v1/admins");
+}
+
+export function createAdmin(payload: { username: string; password: string; role: string }) {
+  return api<AdminUser>("/api/v1/admins", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function updateAdminRole(username: string, role: string) {
+  return api<AdminUser>("/api/v1/admins/" + encodeURIComponent(username), {
+    method: "PATCH",
+    body: JSON.stringify({ role }),
+  });
+}
+
+export function resetAdminPassword(username: string, password: string) {
+  return api<void>("/api/v1/admins/" + encodeURIComponent(username) + "/password", {
+    method: "POST",
+    body: JSON.stringify({ password }),
+  });
+}
+
+export function deleteAdmin(username: string) {
+  return api<void>("/api/v1/admins/" + encodeURIComponent(username), { method: "DELETE" });
 }

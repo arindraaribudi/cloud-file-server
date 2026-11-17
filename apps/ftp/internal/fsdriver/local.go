@@ -1,6 +1,7 @@
 package fsdriver
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -33,6 +34,23 @@ func (l *Local) Create(name string) (afero.File, error) {
 }
 func (l *Local) OpenFile(name string, flag int, perm os.FileMode) (afero.File, error) {
 	return l.fs.OpenFile(name, flag, perm)
+}
+
+// ReadRange reads up to length bytes at offset. fileevents uses it for MIME
+// sniffing.
+func (l *Local) ReadRange(name string, offset, length int64) ([]byte, error) {
+	if length <= 0 {
+		return nil, nil
+	}
+	f, err := l.fs.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return nil, err
+	}
+	return io.ReadAll(io.LimitReader(f, length))
 }
 func (l *Local) Remove(name string) error             { return l.fs.Remove(name) }
 func (l *Local) Rename(oldname, newname string) error { return l.fs.Rename(oldname, newname) }

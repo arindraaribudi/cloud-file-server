@@ -1,11 +1,19 @@
+import { createServer } from "node:http";
+import { Readable } from "node:stream";
 import { resolve, join, normalize } from "node:path";
 import { stat } from "node:fs/promises";
 
 const DIST = resolve(import.meta.dir, "dist");
 const FTP_UPSTREAM = process.env.FTP_UPSTREAM ?? "http://ftp-server:7000";
 const PORT = Number(process.env.PORT ?? 9001);
+const MAX_HEADER_SIZE = Number(process.env.WEB_MAX_HEADER_SIZE ?? 64 * 1024);
 
-const HEADERS_TO_STRIP = new Set(["host", "connection", "content-length"]);
+const HEADERS_TO_STRIP = new Set([
+  "host",
+  "connection",
+  "content-length",
+  "transfer-encoding",
+]);
 
 function mimeFor(p) {
   if (p.endsWith(".html")) return "text/html; charset=utf-8";
@@ -25,58 +33,76 @@ async function serveStatic(pathname) {
   try {
     decoded = decodeURIComponent(pathname);
   } catch {
-    return new Response("Bad Request", { status: 400 });
+    return { status: 400, headers: { "content-type": "text/plain" }, body: "Bad Request" };
   }
   const safe = normalize(decoded).replace(/^([/\\])+/, "");
   const full = join(DIST, safe);
-  if (!full.startsWith(DIST)) return new Response("Forbidden", { status: 403 });
+  if (!full.startsWith(DIST)) {
+    return { status: 403, headers: { "content-type": "text/plain" }, body: "Forbidden" };
+  }
   try {
     const s = await stat(full);
     if (s.isDirectory()) throw new Error("dir");
-    const f = Bun.file(full);
-    return new Response(f, { headers: { "content-type": mimeFor(full) } });
+    const file = Bun.file(full);
+    return {
+      status: 200,
+      headers: { "content-type": mimeFor(full), "content-length": String(s.size) },
+      body: Buffer.from(await file.arrayBuffer()),
+    };
   } catch {
-    // SPA fallback
-    return new Response(Bun.file(join(DIST, "index.html")), {
+    const file = Bun.file(join(DIST, "index.html"));
+    return {
+      status: 200,
       headers: { "content-type": "text/html; charset=utf-8" },
-    });
+      body: Buffer.from(await file.arrayBuffer()),
+    };
   }
 }
 
-async function proxyApi(req) {
-  const url = new URL(req.url);
-  const target = `${FTP_UPSTREAM}${url.pathname}${url.search}`;
+async function proxyApi(req, url) {
+  const target = FTP_UPSTREAM + url.pathname + url.search;
   const headers = new Headers();
-  for (const [k, v] of req.headers) {
-    if (!HEADERS_TO_STRIP.has(k.toLowerCase())) headers.set(k, v);
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (HEADERS_TO_STRIP.has(key.toLowerCase()) || value === undefined) continue;
+    if (Array.isArray(value)) headers.set(key, value.join(", "));
+    else headers.set(key, String(value));
   }
   const init = { method: req.method, headers, redirect: "manual" };
   if (req.method !== "GET" && req.method !== "HEAD") {
-    init.body = req.body;
+    init.body = Readable.toWeb(req);
     init.duplex = "half";
   }
   const upstream = await fetch(target, init);
-  if (upstream.status >= 300 && upstream.status < 400) {
-    const outHeaders = new Headers();
-    for (const [k, v] of upstream.headers) {
-      if (k.toLowerCase() === "set-cookie") continue;
-      outHeaders.set(k, v);
-    }
-    const setCookies = typeof upstream.headers.getSetCookie === "function" ? upstream.headers.getSetCookie() : [];
-    for (const c of setCookies) outHeaders.append("set-cookie", c);
-    return new Response(null, { status: upstream.status, headers: outHeaders });
+  const outHeaders = {};
+  for (const [key, value] of upstream.headers) {
+    if (key.toLowerCase() === "set-cookie") continue;
+    outHeaders[key] = value;
   }
-  return upstream;
+  const setCookies = typeof upstream.headers.getSetCookie === "function" ? upstream.headers.getSetCookie() : [];
+  if (setCookies.length > 0) outHeaders["set-cookie"] = setCookies;
+  return {
+    status: upstream.status,
+    headers: outHeaders,
+    body: Buffer.from(await upstream.arrayBuffer()),
+  };
 }
 
-Bun.serve({
-  port: PORT,
-  hostname: "0.0.0.0",
-  fetch(req) {
-    const url = new URL(req.url);
-    if (url.pathname.startsWith("/api/")) return proxyApi(req);
-    return serveStatic(url.pathname);
-  },
+const server = createServer({ maxHeaderSize: MAX_HEADER_SIZE }, async (req, res) => {
+  try {
+    const url = new URL(req.url ?? "/", "http://" + (req.headers.host ?? "localhost"));
+    const result = url.pathname.startsWith("/api/")
+      ? await proxyApi(req, url)
+      : await serveStatic(url.pathname);
+    res.writeHead(result.status, result.headers);
+    if (req.method === "HEAD") res.end();
+    else res.end(result.body);
+  } catch (err) {
+    console.error("[web] request failed", err);
+    if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain" });
+    res.end("Bad Gateway");
+  }
 });
 
-console.log(`[web] listening on :${PORT} (dist=${DIST}, upstream=${FTP_UPSTREAM})`);
+server.listen(PORT, "0.0.0.0", () => {
+  console.log("[web] listening on :" + PORT + " (dist=" + DIST + ", upstream=" + FTP_UPSTREAM + ", maxHeaderSize=" + MAX_HEADER_SIZE + ")");
+});

@@ -37,6 +37,21 @@ func TestLoadDefaults(t *testing.T) {
 	if c.StorageLocalRoot != "./data" {
 		t.Errorf("StorageLocalRoot=%q", c.StorageLocalRoot)
 	}
+	if c.AdminLocalLogin {
+		t.Error("AdminLocalLogin should default false")
+	}
+}
+
+func TestLoadAdminLocalLogin(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://u:p@h:5432/d")
+	t.Setenv("ADMIN_LOCAL_LOGIN", "true")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.AdminLocalLogin {
+		t.Error("AdminLocalLogin should be true")
+	}
 }
 
 func TestLoadRequiresDatabaseURL(t *testing.T) {
@@ -154,5 +169,110 @@ func TestLoadSFTPEnvOverrides(t *testing.T) {
 	}
 	if c.SFTPHostKey != "c29tZS1iYXNlNjQtdmFsdWU=" {
 		t.Errorf("SFTPHostKey=%q", c.SFTPHostKey)
+	}
+}
+
+func TestLoadFileEventDefaults(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://u:p@h:5432/d")
+	t.Setenv("FILE_EVENTS_ENABLED", "")
+	t.Setenv("FILE_EVENTS_MIME_SNIFF_MODE", "")
+	t.Setenv("FILE_EVENTS_MIME_SNIFF_MAX_BYTES", "")
+	t.Setenv("FILE_EVENT_RETENTION_DAYS", "")
+	t.Setenv("WORKFLOW_API_URL", "")
+	t.Setenv("WORKFLOW_SERVICE_TOKEN", "")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.FileEventsEnabled {
+		t.Error("FileEventsEnabled should default to true")
+	}
+	if c.FileEventsMimeSniffMode != "fallback" {
+		t.Errorf("FileEventsMimeSniffMode=%q", c.FileEventsMimeSniffMode)
+	}
+	if c.FileEventsMimeSniffMaxBytes != 8<<20 {
+		t.Errorf("FileEventsMimeSniffMaxBytes=%d", c.FileEventsMimeSniffMaxBytes)
+	}
+	if c.FileEventRetentionDays != 30 {
+		t.Errorf("FileEventRetentionDays=%d", c.FileEventRetentionDays)
+	}
+	if c.WorkflowAPIURL != "" || c.WorkflowServiceToken != "" {
+		t.Errorf("workflow config should default empty: %q/%q", c.WorkflowAPIURL, c.WorkflowServiceToken)
+	}
+}
+
+func TestLoadFileEventOverrides(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://u:p@h:5432/d")
+	t.Setenv("FILE_EVENTS_ENABLED", "false")
+	t.Setenv("FILE_EVENTS_MIME_SNIFF_MODE", "always")
+	t.Setenv("FILE_EVENTS_MIME_SNIFF_MAX_BYTES", "1024")
+	t.Setenv("FILE_EVENT_RETENTION_DAYS", "7")
+	t.Setenv("WORKFLOW_API_URL", "http://workflow:8081")
+	t.Setenv("WORKFLOW_SERVICE_TOKEN", "test-token")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.FileEventsEnabled {
+		t.Error("FileEventsEnabled should be false")
+	}
+	if c.FileEventsMimeSniffMode != "always" {
+		t.Errorf("FileEventsMimeSniffMode=%q", c.FileEventsMimeSniffMode)
+	}
+	if c.FileEventsMimeSniffMaxBytes != 1024 {
+		t.Errorf("FileEventsMimeSniffMaxBytes=%d", c.FileEventsMimeSniffMaxBytes)
+	}
+	if c.FileEventRetentionDays != 7 {
+		t.Errorf("FileEventRetentionDays=%d", c.FileEventRetentionDays)
+	}
+	if c.WorkflowAPIURL != "http://workflow:8081" || c.WorkflowServiceToken != "test-token" {
+		t.Errorf("workflow config=%q/%q", c.WorkflowAPIURL, c.WorkflowServiceToken)
+	}
+}
+
+func TestLoadRejectsInvalidFileEventSettings(t *testing.T) {
+	cases := []struct {
+		name string
+		key  string
+		val  string
+	}{
+		{"mode", "FILE_EVENTS_MIME_SNIFF_MODE", "sometimes"},
+		{"max-zero", "FILE_EVENTS_MIME_SNIFF_MAX_BYTES", "0"},
+		{"max-not-number", "FILE_EVENTS_MIME_SNIFF_MAX_BYTES", "abc"},
+		{"retention-zero", "FILE_EVENT_RETENTION_DAYS", "0"},
+		{"retention-not-number", "FILE_EVENT_RETENTION_DAYS", "abc"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("DATABASE_URL", "postgres://u:p@h:5432/d")
+			t.Setenv(tc.key, tc.val)
+			if _, err := Load(); err == nil {
+				t.Fatalf("expected error for %s=%q", tc.key, tc.val)
+			}
+		})
+	}
+}
+
+func TestLoadStorageEnabledBackends(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://u:p@h:5432/d")
+
+	t.Setenv("STORAGE_ENABLED_BACKENDS", "")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.StorageEnabledBackends) != 0 {
+		t.Errorf("default StorageEnabledBackends=%v, want empty", c.StorageEnabledBackends)
+	}
+
+	t.Setenv("STORAGE_ENABLED_BACKENDS", " COS, local ,,cos")
+	c, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.StorageEnabledBackends; len(got) != 2 || got[0] != "cos" || got[1] != "local" {
+		t.Errorf("StorageEnabledBackends=%v, want [cos local]", got)
 	}
 }

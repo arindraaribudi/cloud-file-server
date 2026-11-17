@@ -31,6 +31,13 @@ type ObjectStorage interface {
 	BackendLocation() string
 }
 
+// Copier is an optional storage capability for efficient server-side copies.
+// Workflow output components use it to copy between two user roots without
+// streaming the object through the application.
+type Copier interface {
+	Copy(ctx context.Context, srcRoot, srcPath, dstRoot, dstPath string) error
+}
+
 // Touchpoint is a protocol frontend (FTP today; SFTP/WebDAV later) that
 // core starts/stops as a unit.
 type Touchpoint interface {
